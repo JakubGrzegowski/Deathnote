@@ -248,6 +248,8 @@ end
 
 local function TooltipUnit(tooltip)
   local _, unit = tooltip:GetUnit()
+  -- Instances hand tooltips secret unit tokens that addons may not pass to Unit* APIs.
+  if issecretvalue and issecretvalue(unit) then return end
   if not (unit and UnitIsPlayer(unit)) or UnitIsFriend("player", unit) then return end
   local e = find(UnitGUID(unit), GetUnitName(unit, true))
   if e then

@@ -173,17 +173,22 @@ local function Notify(msg, sound)
   PlaySound(sound, "Master")
 end
 
-local function Alert(e, how)
-  local k, now = key(e.name), GetTime()
-  if now - (lastAlert[k] or -REALERT) < REALERT then return end
-  lastAlert[k] = now
+-- Time and place of a sighting. Our own position: the enemy's is not readable,
+-- but nameplates only show within ~20 yd.
+local function Stamp(e)
   e.seen, e.seenZone = time(), GetRealZoneText()
-  -- Our own position: the enemy's is not readable, but nameplates only show within ~20 yd.
   local map = C_Map.GetBestMapForUnit("player")
   local pos = map and C_Map.GetPlayerMapPosition(map, "player")
   local x, y
   if pos then x, y = pos:GetXY() end
   if x and x > 0 then e.seenMap, e.seenX, e.seenY = map, x, y else e.seenMap, e.seenX, e.seenY = nil end
+end
+
+local function Alert(e, how)
+  local k, now = key(e.name), GetTime()
+  if now - (lastAlert[k] or -REALERT) < REALERT then return end
+  lastAlert[k] = now
+  Stamp(e)
   local msg = ("PERSONA NON GRATA: %s (%s)"):format(e.name, e.reason)
   Notify(msg, SOUNDKIT.RAID_WARNING)
   say(msg .. (e.author and (" |cff888888from " .. e.author .. "|r") or "") .. " |cff888888[" .. how .. "]|r")
@@ -209,6 +214,79 @@ local function OnSighting(author, f)
   -- On screen only when it is in our zone; elsewhere the chat line is enough.
   if e.seenZone == GetRealZoneText() then Notify(msg, SOUNDKIT.TELL_MESSAGE) end
   RefreshUI()
+end
+
+-- Recent fights ----------------------------------------------------------------
+-- Suggestions for the list: enemy players who attacked us or took part in our death.
+
+local MAX_RECENT, FIGHT_GAP = 30, 300
+local RACE_FACTION = { Human = "Alliance", Dwarf = "Alliance", NightElf = "Alliance", Gnome = "Alliance",
+  Orc = "Horde", Scourge = "Horde", Tauren = "Horde", Troll = "Horde" }
+local lastFight = {}
+
+local function open(v) if not (issecretvalue and issecretvalue(v)) then return v end end
+
+local function Fought(name, guid, killed, faction, class, classFile)
+  local _, kind = IsInInstance()
+  if not name or name == "" or kind == "pvp" or kind == "arena" then return end
+  name = Ambiguate(name, "none")
+  local k = key(name)
+  local e = db.recent[k]
+  if not killed and e and GetTime() - (lastFight[k] or -FIGHT_GAP) < FIGHT_GAP then return end
+  lastFight[k] = GetTime()
+  e = e or { suggest = true, name = name, kills = 0, fights = 0 }
+  if killed then e.kills = e.kills + 1 else e.fights = e.fights + 1 end
+  e.guid, e.faction = guid or e.guid, faction or e.faction
+  e.class, e.classFile = class or e.class, classFile or e.classFile
+  Stamp(e)
+  db.recent[k] = e
+  local n, oldest = 0, nil
+  for kk, x in pairs(db.recent) do
+    n = n + 1
+    if not oldest or x.seen < db.recent[oldest].seen then oldest = kk end
+  end
+  if n > MAX_RECENT then db.recent[oldest] = nil end
+  RefreshUI()
+end
+
+local function OnUnitTarget(unit)
+  if issecretvalue and issecretvalue(unit) then return end
+  if not (unit == "target" or unit:find("^nameplate")) or not UnitAffectingCombat("player") then return end
+  if not UnitIsPlayer(unit) or UnitIsFriend("player", unit) or not UnitIsUnit(unit .. "target", "player") then return end
+  local faction = UnitFactionGroup(unit)
+  if faction == UnitFactionGroup("player") then return end -- duel
+  local class, classFile = UnitClass(unit)
+  Fought(open(GetUnitName(unit, true)), open(UnitGUID(unit)), false, faction, open(class), open(classFile))
+end
+
+-- The combat log is closed on Forever, but the death recap lists who hit us.
+local function ReadRecap()
+  local ok, has = pcall(C_DeathRecap.HasRecapEvents)
+  if not (ok and has) then return false end
+  local ok2, events = pcall(C_DeathRecap.GetRecapEvents)
+  local done = {}
+  for _, ev in ipairs(ok2 and events or {}) do
+    local guid = open(ev.sourceGUID)
+    if type(guid) == "string" and guid:find("^Player%-") and not done[guid] then
+      done[guid] = true
+      local class, classFile, _, race, _, name = GetPlayerInfoByGUID(guid)
+      local faction = race and RACE_FACTION[race]
+      if faction ~= UnitFactionGroup("player") then
+        Fought(name or open(ev.sourceName), guid, true, faction, class, classFile)
+      end
+    end
+  end
+  return true
+end
+
+local function OnDeath()
+  if not C_DeathRecap then return end
+  local tries = 0
+  local function Try()
+    tries = tries + 1
+    if not ReadRecap() and tries < 4 then C_Timer.After(0.5 * tries, Try) end
+  end
+  C_Timer.After(0.3, Try)
 end
 
 -- Nameplates and tooltips -----------------------------------------------------
@@ -369,6 +447,16 @@ local function Remove(name)
   Changed(true)
 end
 
+local function Adopt(e)
+  local k = key(e.name)
+  Put(e.name, ("%s in %s"):format(e.kills > 0 and "killed me" or "attacked me", e.seenZone or "?"))
+  local p = db.players[k]
+  p.guid, p.faction, p.class, p.classFile = e.guid, e.faction, e.class, e.classFile
+  p.seen, p.seenZone, p.seenMap, p.seenX, p.seenY = e.seen, e.seenZone, e.seenMap, e.seenX, e.seenY
+  db.recent[k] = nil
+  Changed(true)
+end
+
 local function HideShared(e)
   db.hidden[e.author .. "|" .. key(e.name)] = true
   say(("hidden %s (from %s)"):format(e.name, e.author))
@@ -379,7 +467,7 @@ end
 
 local ISSUES_URL = "https://github.com/JakubGrzegowski/Deathnote/issues"
 local TABS = { { "mine", "Mine", "My entries" }, { "party", "Party", "From my party" },
-  { "guild", "Guild", "From my guild" }, { "all", "All" } }
+  { "guild", "Guild", "From my guild" }, { "all", "All" }, { "recent", "Recent" } }
 
 local function SetClass(e, classFile)
   e.classFile = classFile
@@ -487,9 +575,23 @@ local function ShowPicker(anchor, options, current, onPick)
   picker:Show()
 end
 
+local function SuggestReason(e)
+  local function n(c) return c > 1 and (" (" .. c .. "x)") or "" end
+  return e.kills > 0 and ("killed you" .. n(e.kills)) or ("attacked you" .. n(e.fights))
+end
+
 local function Entries(tab)
   local list = {}
-  if tab == "mine" then
+  if tab == "recent" then
+    for k, e in pairs(db.recent) do
+      if not db.players[k] then
+        e.reason = SuggestReason(e)
+        list[#list + 1] = e
+      end
+    end
+    table.sort(list, function(a, b) return a.seen > b.seen end)
+    return list
+  elseif tab == "mine" then
     for _, e in pairs(db.players) do list[#list + 1] = e end
   else
     for author, l in pairs(db.shared) do
@@ -602,8 +704,8 @@ local function BuildUI()
   local tabs = {}
   for i, t in ipairs(TABS) do
     local b = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-    b:SetSize(110, 22)
-    b:SetPoint("TOPLEFT", 20 + (i - 1) * 114, -74)
+    b:SetSize(96, 22)
+    b:SetPoint("TOPLEFT", 20 + (i - 1) * 100, -74)
     b:SetScript("OnClick", function()
       ui.tab = t[1]
       ui.Refresh()
@@ -643,14 +745,14 @@ local function BuildUI()
       b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
       b:SetScript("OnClick", function(self)
         local e = row.e
-        if e.author then return end
+        if e.author or e.suggest then return end
         GameTooltip:Hide()
         ShowPicker(self, options(e), current(e), function(v) choose(e, v) end)
       end)
       b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine(label .. ": " .. (show(row.e) or "unknown"))
-        if not row.e.author then GameTooltip:AddLine("Click to choose", 0.4, 0.8, 0.4) end
+        if not (row.e.author or row.e.suggest) then GameTooltip:AddLine("Click to choose", 0.4, 0.8, 0.4) end
         GameTooltip:Show()
       end)
       b:SetScript("OnLeave", GameTooltip_Hide)
@@ -713,15 +815,24 @@ local function BuildUI()
     end)
     pin:SetScript("OnLeave", GameTooltip_Hide)
     row.pin = pin
-    row.seen = Cell(row, 362, 100, "GameFontDisableSmall")
+    row.seen = Cell(row, 362, 78, "GameFontDisableSmall")
 
     local del = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     del:SetSize(22, 18)
     del:SetPoint("RIGHT", -2, 0)
     del:SetText("X")
     del:SetScript("OnClick", function()
-      if row.e.author then HideShared(row.e) else Remove(row.e.name) end
+      local e = row.e
+      if e.suggest then
+        db.recent[key(e.name)] = nil
+        RefreshUI()
+      elseif e.author then HideShared(e) else Remove(e.name) end
     end)
+    row.add = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.add:SetSize(22, 18)
+    row.add:SetPoint("RIGHT", del, "LEFT", -2, 0)
+    row.add:SetText("+")
+    row.add:SetScript("OnClick", function() Adopt(row.e) end)
     row.title = Cell(row, 4, 300, "GameFontNormal")
     row.parts = { row.faction, row.class, row.name, row.reason, row.pin, row.seen, del }
 
@@ -732,6 +843,12 @@ local function BuildUI()
       GameTooltip:AddLine(e.reason, 1, 0.2, 0.2, true)
       GameTooltip:AddLine((e.faction or "faction unknown") .. (e.class and (" " .. e.class) or ""), 0.8, 0.8, 0.8)
       if e.author then GameTooltip:AddLine("Written by " .. e.author, 0.6, 0.6, 1) end
+      if e.suggest then
+        GameTooltip:AddLine("Last fight " .. date("%Y-%m-%d %H:%M", e.seen) .. " " .. (e.seenZone or ""), 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("+ adds to your list, X dismisses", 0.4, 0.8, 0.4)
+        GameTooltip:Show()
+        return
+      end
       if e.added then GameTooltip:AddLine("Added " .. date("%Y-%m-%d %H:%M", e.added), 0.6, 0.6, 0.6) end
       if e.seen then
         GameTooltip:AddLine("Last seen " .. date("%Y-%m-%d %H:%M", e.seen) .. " " .. (e.seenZone or "") .. " " .. Coords(e), 0.6, 0.6, 0.6)
@@ -779,7 +896,7 @@ local function BuildUI()
   function ui.Refresh()
     local total = 0
     for i, t in ipairs(TABS) do
-      local n = t[3] and #Entries(t[1]) or total
+      local n = t[1] == "all" and total or #Entries(t[1])
       total = total + (t[3] and n or 0)
       tabs[i]:SetText(("%s (%d)"):format(t[2], n))
       if ui.tab == t[1] then tabs[i]:LockHighlight() else tabs[i]:UnlockHighlight() end
@@ -792,6 +909,7 @@ local function BuildUI()
       row.title:SetShown(header)
       row:EnableMouse(not header)
       for _, part in ipairs(row.parts) do part:SetShown(not header) end
+      row.add:SetShown(not header and e.suggest == true)
       if header then
         row.title:SetText(e.header)
       else
@@ -804,7 +922,7 @@ local function BuildUI()
         if not row.reason:HasFocus() then
           row.reason:SetText(e.author and ("|cff8888ff" .. e.author .. ":|r " .. e.reason) or e.reason)
         end
-        row.reason:EnableMouse(not e.author)
+        row.reason:EnableMouse(not (e.author or e.suggest))
         row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "never seen")
         row.pin:SetShown(e.seenMap ~= nil)
       end
@@ -904,6 +1022,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     db.players = db.players or {}
     db.shared = db.shared or {}
     db.hidden = db.hidden or {}
+    db.recent = db.recent or {}
     Rebuild()
     MinimapButton()
     C_ChatInfo.RegisterAddonMessagePrefix(COMM)
@@ -914,7 +1033,8 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
       GameTooltip:HookScript("OnTooltipSetUnit", TooltipUnit)
     end
     for _, ev in ipairs({ "PLAYER_LOGIN", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED",
-      "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE" }) do
+      "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE",
+      "UNIT_TARGET", "PLAYER_DEAD" }) do
       self:RegisterEvent(ev)
     end
   elseif event == "PLAYER_LOGIN" then
@@ -938,5 +1058,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
   elseif event == "NAME_PLATE_UNIT_REMOVED" then PlateRemoved(arg)
   elseif event == "UPDATE_MOUSEOVER_UNIT" then CheckUnit("mouseover", "mouseover")
   elseif event == "PLAYER_TARGET_CHANGED" then CheckUnit("target", "target")
+  elseif event == "UNIT_TARGET" then OnUnitTarget(arg)
+  elseif event == "PLAYER_DEAD" then OnDeath()
   end
 end)

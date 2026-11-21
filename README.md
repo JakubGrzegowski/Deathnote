@@ -17,6 +17,10 @@ Add a player to your Deathnote with a short reason. From then on, whenever that 
 
 Detection uses nameplates, your target and mouseover. Deathnote Forever also raises the enemy nameplate distance, so you spot your enemies as early as the game allows.
 
+## Who killed you?
+
+Died and didn't catch the name? Open the **Recent** tab. Deathnote Forever remembers the enemy players who took part in your death or attacked you, with their class, the zone and the time. Click **+** to add one to your list with the reason already filled in, or **X** to dismiss it. Battlegrounds and arenas are skipped.
+
 ## Share with your guild and party
 
 Deathnote Forever users in your guild and party automatically exchange their lists. One player's enemy becomes everyone's enemy.
@@ -29,7 +33,7 @@ Deathnote Forever users in your guild and party automatically exchange their lis
 
 Open it with **/deathnote** or the minimap button.
 
-- **Tabs:** Mine, Party, Guild and All. All is split into sections, so you always know where an entry came from. Party and Guild never repeat players already on your own list.
+- **Tabs:** Mine, Party, Guild, All and Recent. All is split into sections, so you always know where an entry came from. Party and Guild never repeat players already on your own list.
 - **Faction and class:** pick them from a list for players you added by hand. They're also filled in automatically the first time you see the player.
 - **Class colours:** names are coloured by class at a glance.
 - **Last seen:** each entry remembers when and where the player was last spotted. Click the pin to set a waypoint there.
@@ -39,7 +43,7 @@ Open it with **/deathnote** or the minimap button.
 
 ## Commands
 
-- `/deathnote`: open or close the list
+- `/deathnote` or `/dnf`: open or close the list
 - `/deathnote add`: add your current target
 - `/deathnote add Name reason`: add a player by name
 - `/deathnote del Name`: remove a player (or your target)

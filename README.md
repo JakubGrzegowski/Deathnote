@@ -1,25 +1,25 @@
-# Deathnote
+# Deathnote Forever
 
 **Write down the players who killed you, share your lists with your guild and party, get notified when somebody finds your target and get the revenge you deserve.**
 
-That rogue who ganked you at the flight master. The warrior who camped your corpse for ten minutes. The hunter who pulled you into a mob of elites. You will meet them again, and Deathnote makes sure you know the moment you do.
+That rogue who ganked you at the flight master. The warrior who camped your corpse for ten minutes. The hunter who pulled you into a mob of elites. You will meet them again, and Deathnote Forever makes sure you know the moment you do.
 
 ---
 
 ## How it works
 
-Add a player to your Deathnote with a short reason. From then on, whenever that player shows up near you, Deathnote warns you:
+Add a player to your Deathnote with a short reason. From then on, whenever that player shows up near you, Deathnote Forever warns you:
 
 - **On-screen warning** in raid warning style, with the name and your reason
 - **Warning sound**, so you notice even mid-fight
 - **Skull marker** above their nameplate
 - **Tooltip line** "Persona non grata: reason" when you mouse over them
 
-Detection uses nameplates, your target and mouseover. Deathnote also raises the enemy nameplate distance, so you spot your enemies as early as the game allows.
+Detection uses nameplates, your target and mouseover. Deathnote Forever also raises the enemy nameplate distance, so you spot your enemies as early as the game allows.
 
 ## Share with your guild and party
 
-Deathnote users in your guild and party automatically exchange their lists. One player's enemy becomes everyone's enemy.
+Deathnote Forever users in your guild and party automatically exchange their lists. One player's enemy becomes everyone's enemy.
 
 - When a guild or party member spots someone from a list, you get a chat message with the **zone and coordinates**. If it happens in your zone, you also get an on-screen notice.
 - Type **/deathnote way** to set a map waypoint to the latest sighting and go settle the score.
@@ -47,7 +47,7 @@ Open it with **/deathnote** or the minimap button.
 
 ## Feedback and bugs
 
-Found a bug or have an idea? Click **Report a bug** in the Deathnote window, or open an issue on GitHub:
+Found a bug or have an idea? Click **Report a bug** in the Deathnote Forever window, or open an issue on GitHub:
 https://github.com/JakubGrzegowski/Deathnote/issues
 
 ---

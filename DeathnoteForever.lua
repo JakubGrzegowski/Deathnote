@@ -1,11 +1,11 @@
--- Deathnote: warns when a listed player shows up.
+-- Deathnote Forever: warns when a listed player shows up.
 -- Enemy faction only for now. Detection: enemy nameplates, mouseover, target.
 -- The Forever client forbids addons from registering COMBAT_LOG_EVENT_UNFILTERED.
--- Sharing: own entries are synced to guild and group members running Deathnote,
+-- Sharing: own entries are synced to guild and group members running Deathnote Forever,
 -- and sightings are reported to them. Entries received from others are never re-shared.
 local ADDON = ...
-local PREFIX = "|cffff3333Deathnote|r: "
-local COMM = "Deathnote"
+local PREFIX = "|cffff3333Deathnote Forever|r: "
+local COMM = "DNForever"
 local VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?"
 local MAX_REASON = 500
 local REALERT = 60
@@ -54,7 +54,7 @@ end
 -- Waypoint on the last sighting: TomTom if installed, else the built-in map pin.
 local function Waypoint(e)
   if not (e and e.seenMap) then return say("no sighting with coordinates yet") end
-  local title = "Death Note: " .. e.name
+  local title = "Deathnote Forever: " .. e.name
   if TomTom and TomTom.AddWaypoint then
     TomTom:AddWaypoint(e.seenMap, e.seenX, e.seenY, { title = title })
   elseif C_Map.SetUserWaypoint and C_Map.CanSetUserWaypointOnMap(e.seenMap) then
@@ -304,7 +304,7 @@ local function OnComm(msg, sender)
     end
     if f[5] and not warnedVersion and Newer(f[5], VERSION) then
       warnedVersion = true
-      say(("%s has a newer Deathnote (%s, you have %s), ask them for it"):format(author, f[5], VERSION))
+      say(("%s has a newer Deathnote Forever (%s, you have %s), ask them for it"):format(author, f[5], VERSION))
     end
     if f[4] == "1" and GetTime() - (replied[author] or -30) > 30 then
       replied[author] = GetTime()
@@ -518,7 +518,7 @@ local function TabRows(tab)
   return out
 end
 
-StaticPopupDialogs.DEATHNOTE_ISSUES = {
+StaticPopupDialogs.DEATHNOTEFOREVER_ISSUES = {
   text = "Report a bug or suggest a feature on GitHub.\nCopy the link (Ctrl+C) and open it in your browser:",
   button1 = OKAY,
   hasEditBox = true,
@@ -538,7 +538,7 @@ StaticPopupDialogs.DEATHNOTE_ISSUES = {
 
 local function BuildUI()
   local W, ROWH = 540, 20
-  ui = CreateFrame("Frame", "DeathnoteFrame", UIParent, "BasicFrameTemplateWithInset")
+  ui = CreateFrame("Frame", "DeathnoteForeverFrame", UIParent, "BasicFrameTemplateWithInset")
   ui:SetSize(W, 440)
   ui:SetPoint("CENTER")
   ui:SetFrameStrata("DIALOG")
@@ -548,10 +548,10 @@ local function BuildUI()
   ui:RegisterForDrag("LeftButton")
   ui:SetScript("OnDragStart", ui.StartMoving)
   ui:SetScript("OnDragStop", ui.StopMovingOrSizing)
-  tinsert(UISpecialFrames, "DeathnoteFrame")
+  tinsert(UISpecialFrames, "DeathnoteForeverFrame")
   local title = ui.TitleText or ui:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   title:SetPoint("TOP", 0, -5)
-  title:SetText("Death Note v" .. VERSION)
+  title:SetText("Deathnote Forever v" .. VERSION)
 
   local function Label(text, x, y)
     local fs = ui:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -772,7 +772,7 @@ local function BuildUI()
   issuesBtn:SetSize(110, 22)
   issuesBtn:SetPoint("RIGHT", testBtn, "LEFT", -6, 0)
   issuesBtn:SetText("Report a bug")
-  issuesBtn:SetScript("OnClick", function() StaticPopup_Show("DEATHNOTE_ISSUES") end)
+  issuesBtn:SetScript("OnClick", function() StaticPopup_Show("DEATHNOTEFOREVER_ISSUES") end)
 
   ui:HookScript("OnHide", HidePicker)
 
@@ -828,7 +828,7 @@ end
 
 -- Minimap button: click toggles the panel, drag moves it around the minimap edge.
 local function MinimapButton()
-  local b = CreateFrame("Button", "DeathnoteMinimapButton", Minimap)
+  local b = CreateFrame("Button", "DeathnoteForeverMinimapButton", Minimap)
   b:SetSize(31, 31)
   b:SetFrameStrata("MEDIUM")
   b:SetFrameLevel(8)
@@ -860,7 +860,7 @@ local function MinimapButton()
   b:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
   b:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-    GameTooltip:AddLine("Deathnote v" .. VERSION)
+    GameTooltip:AddLine("Deathnote Forever v" .. VERSION)
     GameTooltip:AddLine("Click: open the list", 1, 1, 1)
     GameTooltip:AddLine("Drag: move this button", 1, 1, 1)
     GameTooltip:Show()
@@ -869,8 +869,9 @@ local function MinimapButton()
   Place()
 end
 
-SLASH_DEATHNOTE1 = "/deathnote"
-SlashCmdList.DEATHNOTE = function(msg)
+SLASH_DEATHNOTEFOREVER1 = "/deathnote"
+SLASH_DEATHNOTEFOREVER2 = "/dnf"
+SlashCmdList.DEATHNOTEFOREVER = function(msg)
   local cmd, rest = msg:match("^(%S*)%s*(.-)%s*$")
   cmd = cmd:lower()
   if cmd == "add" then
@@ -897,8 +898,8 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     if arg == ADDON then say(event .. ": " .. tostring(arg2) .. (InCombatLockdown() and " (in combat)" or "")) end
   elseif event == "ADDON_LOADED" then
     if arg ~= ADDON then return end
-    DeathnoteDB = DeathnoteDB or {}
-    db = DeathnoteDB
+    DeathnoteForeverDB = DeathnoteForeverDB or {}
+    db = DeathnoteForeverDB
     db.hideFriendly = nil
     db.players = db.players or {}
     db.shared = db.shared or {}

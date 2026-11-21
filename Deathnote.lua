@@ -9,7 +9,6 @@ local COMM = "Deathnote"
 local VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?"
 local MAX_REASON = 500
 local REALERT = 60
-local SHARED_TTL = 30 * 24 * 3600
 local SKULL = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8"
 local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 local CLASS_ICONS = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
@@ -904,9 +903,6 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     db.players = db.players or {}
     db.shared = db.shared or {}
     db.hidden = db.hidden or {}
-    for author, list in pairs(db.shared) do
-      if time() - (list.updated or 0) > SHARED_TTL then db.shared[author] = nil end
-    end
     Rebuild()
     MinimapButton()
     C_ChatInfo.RegisterAddonMessagePrefix(COMM)

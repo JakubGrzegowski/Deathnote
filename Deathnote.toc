@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: Deathnote
-## Version: 1.1.0
+## Version: 1.1.1
 ## IconTexture: Interface\TargetingFrame\UI-RaidTargetingIcon_8
 ## Notes: Enemy players you hold a grudge against: on-screen warning, sound and a skull over the head when one is nearby. /deathnote
 ## SavedVariables: DeathnoteDB

@@ -11,6 +11,12 @@ local MAX_REASON = 500
 local REALERT = 60
 local SHARED_TTL = 30 * 24 * 3600
 local SKULL = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8"
+local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+local CLASS_ICONS = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
+local FACTIONS = { "Alliance", "Horde" }
+local FACTION_ICON = { Alliance = "Interface\\Icons\\INV_BannerPVP_02", Horde = "Interface\\Icons\\INV_BannerPVP_01" }
+local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local CLASS_FACTION = { PALADIN = "Alliance", SHAMAN = "Horde" }
 
 local db, ui, lastSighting
 local byKey, byGUID, lastAlert, icons = {}, {}, {}, {}
@@ -26,10 +32,8 @@ local function Rebuild()
   for k, e in pairs(db.players) do byKey[k] = e end
   for author, list in pairs(db.shared) do
     for k, e in pairs(list.entries) do
-      if not byKey[k] and not db.hidden[author .. "|" .. k] then
-        e.author = author
-        byKey[k] = e
-      end
+      e.author = author
+      if not byKey[k] and not db.hidden[author .. "|" .. k] then byKey[k] = e end
     end
   end
   for _, e in pairs(byKey) do if e.guid then byGUID[e.guid] = e end end
@@ -122,8 +126,8 @@ local function SendList(channel, target, wantReply)
   for _, e in ipairs(list) do
     local name = clean(e.name, 40)
     local parts = chunks(clean(e.reason, MAX_REASON * 2), 180)
-    Send(table.concat({ "E", s, name, #parts, clean(e.faction, 10), clean(e.class, 20), clean(e.guid, 40) }, "\t"),
-      channel, target)
+    Send(table.concat({ "E", s, name, #parts, clean(e.faction, 10), clean(e.class, 20), clean(e.guid, 40),
+      clean(e.classFile, 20) }, "\t"), channel, target)
     for i, part in ipairs(parts) do Send(table.concat({ "R", s, key(name), i, part }, "\t"), channel, target) end
   end
   Send("Z\t" .. s, channel, target)
@@ -151,14 +155,17 @@ local function SendSighting(e)
 end
 
 -- Only guild and group members may write into our lists (whispers included).
+-- Returns which tab their entries go to: "guild" or "party".
 local function Trusted(sender)
   local short = Ambiguate(sender, "none")
-  if UnitInParty(short) or UnitInRaid(short) then return true end
   for i = 1, GetNumGuildMembers() do
     local n = GetGuildRosterInfo(i)
-    if n and Ambiguate(n, "none") == short then return true end
+    if n and Ambiguate(n, "none") == short then return "guild" end
   end
+  if UnitInParty(short) or UnitInRaid(short) then return "party" end
 end
+
+local function SourceOf(author, list) return list.source or Trusted(author) or "party" end
 
 -- Alerts ----------------------------------------------------------------------
 
@@ -207,10 +214,22 @@ end
 
 -- Nameplates and tooltips -----------------------------------------------------
 
+-- Own entries added by name get their faction and class once the player is seen.
+local function Learn(e, unit)
+  if e.author or (e.faction and e.classFile) then return end
+  e.faction = e.faction or UnitFactionGroup(unit)
+  if not e.classFile then e.class, e.classFile = UnitClass(unit) end
+  ScheduleBroadcast()
+  RefreshUI()
+end
+
 local function CheckUnit(unit, how)
   if not UnitIsPlayer(unit) or UnitIsFriend("player", unit) then return end
   local e = find(UnitGUID(unit), GetUnitName(unit, true))
-  if e then Alert(e, how) end
+  if e then
+    Learn(e, unit)
+    Alert(e, how)
+  end
   return e
 end
 
@@ -220,6 +239,7 @@ local function PlateAdded(unit, quiet)
   local e
   if quiet then
     e = UnitIsPlayer(unit) and not UnitIsFriend("player", unit) and find(UnitGUID(unit), GetUnitName(unit, true)) or nil
+    if e then Learn(e, unit) end
   else
     e = CheckUnit(unit, "nameplate")
   end
@@ -273,8 +293,8 @@ local function Changed(own)
 end
 
 local function OnComm(msg, sender)
-  local author = Ambiguate(sender, "none")
-  if author == UnitName("player") or not Trusted(sender) then return end
+  local author, source = Ambiguate(sender, "none"), Trusted(sender)
+  if author == UnitName("player") or not source then return end
   local f = { strsplit("\t", msg) }
   for i = 2, #f do f[i] = clean(f[i], 250) end -- no escape codes from other clients
   local t, inc = f[1], incoming[author]
@@ -294,7 +314,8 @@ local function OnComm(msg, sender)
   elseif t == "E" then
     if inc and inc.serial == f[2] and f[3] and f[3] ~= "" then
       inc.entries[key(f[3])] = { name = f[3], nparts = tonumber(f[4]) or 0, parts = {},
-        faction = f[5] ~= "" and f[5] or nil, class = f[6] ~= "" and f[6] or nil, guid = f[7] ~= "" and f[7] or nil }
+        faction = f[5] ~= "" and f[5] or nil, class = f[6] ~= "" and f[6] or nil, guid = f[7] ~= "" and f[7] or nil,
+        classFile = f[8] ~= "" and f[8] or nil }
     end
   elseif t == "R" then
     local e = inc and inc.serial == f[2] and inc.entries[f[3] or ""]
@@ -318,7 +339,7 @@ local function OnComm(msg, sender)
       local o = old and old.entries[k]
       if o then e.seen, e.seenZone, e.seenMap, e.seenX, e.seenY = o.seen, o.seenZone, o.seenMap, o.seenX, o.seenY end
     end
-    db.shared[author] = count > 0 and { updated = time(), entries = inc.entries } or nil
+    db.shared[author] = count > 0 and { updated = time(), entries = inc.entries, source = source } or nil
     Changed(false)
   elseif t == "S" then
     OnSighting(author, f)
@@ -357,12 +378,169 @@ end
 
 -- Panel -----------------------------------------------------------------------
 
-local FACTION_COLOR = { Alliance = "|cff3fa9ff", Horde = "|cffff4040" }
+local ISSUES_URL = "https://github.com/JakubGrzegowski/Deathnote/issues"
+local TABS = { { "mine", "Mine", "My entries" }, { "party", "Party", "From my party" },
+  { "guild", "Guild", "From my guild" }, { "all", "All" } }
+
+local function SetClass(e, classFile)
+  e.classFile = classFile
+  e.class = classFile and (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classFile] or classFile) or nil
+end
+
+local function FitsFaction(classFile, faction)
+  return not (faction and CLASS_FACTION[classFile] and CLASS_FACTION[classFile] ~= faction)
+end
+
+local function ChooseFaction(e, faction)
+  e.faction = faction
+  if e.classFile and not FitsFaction(e.classFile, faction) then SetClass(e, nil) end
+  Changed(true)
+end
+
+local function ChooseClass(e, classFile)
+  SetClass(e, classFile)
+  Changed(true)
+end
+
+local function SetIcon(tex, file, coords)
+  tex:SetTexture(file or UNKNOWN_ICON)
+  if coords then tex:SetTexCoord(unpack(coords)) else tex:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+end
+
+-- Options are { value, label, icon, coords }; value false means unknown.
+local function FactionOptions()
+  local o = { { value = false, label = "Unknown" } }
+  for _, f in ipairs(FACTIONS) do o[#o + 1] = { value = f, label = f, icon = FACTION_ICON[f] } end
+  return o
+end
+
+local function ClassOptions(faction)
+  local o = { { value = false, label = "Unknown" } }
+  for _, c in ipairs(CLASSES) do
+    if FitsFaction(c, faction) then
+      local name = LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[c] or c
+      local color = RAID_CLASS_COLORS[c]
+      local coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[c]
+      o[#o + 1] = { value = c, label = color and color.colorStr and ("|c" .. color.colorStr .. name .. "|r") or name,
+        icon = coords and CLASS_ICONS, coords = coords }
+    end
+  end
+  return o
+end
+
+-- Drop-down list under the clicked icon; a click anywhere else closes it.
+local picker
+local function HidePicker()
+  if picker then
+    picker:Hide()
+    picker.catcher:Hide()
+  end
+end
+
+local function ShowPicker(anchor, options, current, onPick)
+  if not picker then
+    picker = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    picker:SetFrameStrata("FULLSCREEN_DIALOG")
+    picker:SetClampedToScreen(true)
+    picker:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
+      insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+    picker:SetBackdropColor(0, 0, 0, 0.95)
+    picker.catcher = CreateFrame("Button", nil, UIParent)
+    picker.catcher:SetAllPoints(UIParent)
+    picker.catcher:SetFrameStrata("FULLSCREEN")
+    picker.catcher:RegisterForClicks("AnyUp")
+    picker.catcher:SetScript("OnClick", HidePicker)
+    picker.rows = {}
+  end
+  for i, o in ipairs(options) do
+    local b = picker.rows[i]
+    if not b then
+      b = CreateFrame("Button", nil, picker)
+      b:SetSize(140, 18)
+      b:SetPoint("TOPLEFT", 8, -8 - (i - 1) * 18)
+      b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+      b.icon = b:CreateTexture(nil, "ARTWORK")
+      b.icon:SetSize(16, 16)
+      b.icon:SetPoint("LEFT")
+      b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      b.text:SetPoint("LEFT", 22, 0)
+      b.check = b:CreateTexture(nil, "OVERLAY")
+      b.check:SetSize(14, 14)
+      b.check:SetPoint("RIGHT")
+      b.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+      picker.rows[i] = b
+    end
+    SetIcon(b.icon, o.icon, o.coords)
+    b.text:SetText(o.label)
+    b.check:SetShown(o.value == (current or false))
+    b:SetScript("OnClick", function()
+      HidePicker()
+      onPick(o.value or nil)
+    end)
+    b:Show()
+  end
+  for i = #options + 1, #picker.rows do picker.rows[i]:Hide() end
+  picker:SetSize(156, 16 + #options * 18)
+  picker:ClearAllPoints()
+  picker:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+  picker.catcher:Show()
+  picker:Show()
+end
+
+local function Entries(tab)
+  local list = {}
+  if tab == "mine" then
+    for _, e in pairs(db.players) do list[#list + 1] = e end
+  else
+    for author, l in pairs(db.shared) do
+      if SourceOf(author, l) == tab then
+        for k, e in pairs(l.entries) do
+          if not db.players[k] and not db.hidden[author .. "|" .. k] then list[#list + 1] = e end
+        end
+      end
+    end
+  end
+  table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+  return list
+end
+
+-- The All tab: every other tab in its own section, each under a header row.
+local function TabRows(tab)
+  if tab ~= "all" then return Entries(tab) end
+  local out = {}
+  for _, t in ipairs(TABS) do
+    local list = t[3] and Entries(t[1]) or {}
+    if #list > 0 then
+      out[#out + 1] = { header = t[3] }
+      for _, e in ipairs(list) do out[#out + 1] = e end
+    end
+  end
+  return out
+end
+
+StaticPopupDialogs.DEATHNOTE_ISSUES = {
+  text = "Report a bug or suggest a feature on GitHub.\nCopy the link (Ctrl+C) and open it in your browser:",
+  button1 = OKAY,
+  hasEditBox = true,
+  editBoxWidth = 300,
+  OnShow = function(self)
+    local box = self.editBox or self.EditBox
+    box:SetText(ISSUES_URL)
+    box:HighlightText()
+    box:SetFocus()
+  end,
+  EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+  EditBoxOnEnterPressed = function(self) self:GetParent():Hide() end,
+  timeout = 0,
+  whileDead = true,
+  hideOnEscape = true,
+}
 
 local function BuildUI()
-  local W, ROWH = 500, 20
+  local W, ROWH = 540, 20
   ui = CreateFrame("Frame", "DeathnoteFrame", UIParent, "BasicFrameTemplateWithInset")
-  ui:SetSize(W, 420)
+  ui:SetSize(W, 440)
   ui:SetPoint("CENTER")
   ui:SetFrameStrata("DIALOG")
   ui:SetMovable(true)
@@ -396,6 +574,7 @@ local function BuildUI()
   reasonBox:SetMaxLetters(MAX_REASON)
 
   local function DoAdd()
+    ui.tab = "mine"
     local name = strtrim(nameBox:GetText())
     if name ~= "" then
       Put(name, strtrim(reasonBox:GetText()))
@@ -420,8 +599,21 @@ local function BuildUI()
   addBtn:SetText("Add")
   addBtn:SetScript("OnClick", DoAdd)
 
+  ui.tab = "mine"
+  local tabs = {}
+  for i, t in ipairs(TABS) do
+    local b = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
+    b:SetSize(110, 22)
+    b:SetPoint("TOPLEFT", 20 + (i - 1) * 114, -74)
+    b:SetScript("OnClick", function()
+      ui.tab = t[1]
+      ui.Refresh()
+    end)
+    tabs[i] = b
+  end
+
   local sf = CreateFrame("ScrollFrame", nil, ui, "UIPanelScrollFrameTemplate")
-  sf:SetPoint("TOPLEFT", 12, -78)
+  sf:SetPoint("TOPLEFT", 12, -104)
   sf:SetPoint("BOTTOMRIGHT", -32, 40)
   local content = CreateFrame("Frame", nil, sf)
   content:SetSize(W - 44, 1)
@@ -441,12 +633,40 @@ local function BuildUI()
     row:SetSize(W - 44, ROWH)
     row:SetPoint("TOPLEFT", 0, -(i - 1) * ROWH)
     row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-    row.name = Cell(row, 4, 110)
+
+    -- Faction and class icons; on own entries a click opens a list to choose from.
+    local function IconButton(x, label, show, current, options, choose)
+      local b = CreateFrame("Button", nil, row)
+      b:SetSize(16, 16)
+      b:SetPoint("LEFT", x, 0)
+      b.tex = b:CreateTexture(nil, "ARTWORK")
+      b.tex:SetAllPoints()
+      b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+      b:SetScript("OnClick", function(self)
+        local e = row.e
+        if e.author then return end
+        GameTooltip:Hide()
+        ShowPicker(self, options(e), current(e), function(v) choose(e, v) end)
+      end)
+      b:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(label .. ": " .. (show(row.e) or "unknown"))
+        if not row.e.author then GameTooltip:AddLine("Click to choose", 0.4, 0.8, 0.4) end
+        GameTooltip:Show()
+      end)
+      b:SetScript("OnLeave", GameTooltip_Hide)
+      return b
+    end
+    local function Faction(e) return e.faction end
+    row.faction = IconButton(4, "Faction", Faction, Faction, FactionOptions, ChooseFaction)
+    row.class = IconButton(22, "Class", function(e) return e.class end, function(e) return e.classFile end,
+      function(e) return ClassOptions(e.faction) end, ChooseClass)
+    row.name = Cell(row, 42, 100)
 
     -- Own reasons are edited in place: Enter or clicking away saves, Escape reverts.
     local reason = CreateFrame("EditBox", nil, row)
-    reason:SetSize(186, ROWH)
-    reason:SetPoint("LEFT", 118, 0)
+    reason:SetSize(190, ROWH)
+    reason:SetPoint("LEFT", 146, 0)
     reason:SetAutoFocus(false)
     reason:SetMaxLetters(MAX_REASON)
     reason:SetFontObject("GameFontHighlightSmall")
@@ -483,7 +703,7 @@ local function BuildUI()
 
     local pin = CreateFrame("Button", nil, row)
     pin:SetSize(16, 16)
-    pin:SetPoint("LEFT", 310, 0)
+    pin:SetPoint("LEFT", 342, 0)
     pin:SetNormalTexture("Interface\\Icons\\INV_Misc_Map_01")
     pin:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     pin:SetScript("OnClick", function() Waypoint(row.e) end)
@@ -494,7 +714,7 @@ local function BuildUI()
     end)
     pin:SetScript("OnLeave", GameTooltip_Hide)
     row.pin = pin
-    row.seen = Cell(row, 330, 92, "GameFontDisableSmall")
+    row.seen = Cell(row, 362, 100, "GameFontDisableSmall")
 
     local del = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     del:SetSize(22, 18)
@@ -503,6 +723,8 @@ local function BuildUI()
     del:SetScript("OnClick", function()
       if row.e.author then HideShared(row.e) else Remove(row.e.name) end
     end)
+    row.title = Cell(row, 4, 300, "GameFontNormal")
+    row.parts = { row.faction, row.class, row.name, row.reason, row.pin, row.seen, del }
 
     row:SetScript("OnEnter", function(self)
       local e = self.e
@@ -532,7 +754,7 @@ local function BuildUI()
 
   local unhide = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
   unhide:SetSize(110, 22)
-  unhide:SetPoint("BOTTOM", 0, 12)
+  unhide:SetPoint("BOTTOMLEFT", 140, 12)
   unhide:SetScript("OnClick", function()
     wipe(db.hidden)
     Changed(false)
@@ -547,28 +769,51 @@ local function BuildUI()
     Alert({ name = "Test", reason = "alert test" }, "test")
   end)
 
+  local issuesBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
+  issuesBtn:SetSize(110, 22)
+  issuesBtn:SetPoint("RIGHT", testBtn, "LEFT", -6, 0)
+  issuesBtn:SetText("Report a bug")
+  issuesBtn:SetScript("OnClick", function() StaticPopup_Show("DEATHNOTE_ISSUES") end)
+
+  ui:HookScript("OnHide", HidePicker)
+
   function ui.Refresh()
-    local list, shared = {}, 0
-    for _, e in pairs(byKey) do
-      list[#list + 1] = e
-      if e.author then shared = shared + 1 end
+    local total = 0
+    for i, t in ipairs(TABS) do
+      local n = t[3] and #Entries(t[1]) or total
+      total = total + (t[3] and n or 0)
+      tabs[i]:SetText(("%s (%d)"):format(t[2], n))
+      if ui.tab == t[1] then tabs[i]:LockHighlight() else tabs[i]:UnlockHighlight() end
     end
-    table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+    local list, shown = TabRows(ui.tab), 0
     for i, e in ipairs(list) do
       local row = rows[i] or NewRow(i)
-      row.e = e
-      row.name:SetText((FACTION_COLOR[e.faction] or "|cffffffff") .. e.name .. "|r")
-      if not row.reason:HasFocus() then
-        row.reason:SetText(e.author and ("|cff8888ff" .. e.author .. ":|r " .. e.reason) or e.reason)
+      local header = e.header ~= nil
+      row.e = not header and e or nil
+      row.title:SetShown(header)
+      row:EnableMouse(not header)
+      for _, part in ipairs(row.parts) do part:SetShown(not header) end
+      if header then
+        row.title:SetText(e.header)
+      else
+        shown = shown + 1
+        SetIcon(row.faction.tex, FACTION_ICON[e.faction])
+        local coords = e.classFile and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[e.classFile]
+        SetIcon(row.class.tex, coords and CLASS_ICONS, coords)
+        local color = e.classFile and RAID_CLASS_COLORS[e.classFile]
+        row.name:SetText((color and color.colorStr and ("|c" .. color.colorStr) or "|cffffffff") .. e.name .. "|r")
+        if not row.reason:HasFocus() then
+          row.reason:SetText(e.author and ("|cff8888ff" .. e.author .. ":|r " .. e.reason) or e.reason)
+        end
+        row.reason:EnableMouse(not e.author)
+        row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "never seen")
+        row.pin:SetShown(e.seenMap ~= nil)
       end
-      row.reason:EnableMouse(not e.author)
-      row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "never seen")
-      row.pin:SetShown(e.seenMap ~= nil)
       row:Show()
     end
     for i = #list + 1, #rows do rows[i]:Hide() end
     content:SetHeight(math.max(1, #list * ROWH))
-    count:SetText(#list .. " on the list" .. (shared > 0 and (" (" .. shared .. " from others)") or ""))
+    count:SetText(shown .. " on this tab")
     local hidden = 0
     for _ in pairs(db.hidden) do hidden = hidden + 1 end
     unhide:SetText("Unhide (" .. hidden .. ")")

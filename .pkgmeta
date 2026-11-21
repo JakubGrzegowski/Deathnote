@@ -1,0 +1,4 @@
+package-as: DeathnoteForever
+
+ignore:
+  - README.md

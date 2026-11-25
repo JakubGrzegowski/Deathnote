@@ -199,7 +199,7 @@ local function Alert(e, how)
   if now - (lastAlert[k] or -REALERT) < REALERT then return end
   lastAlert[k] = now
   Stamp(e)
-  local msg = ("PERSONA NON GRATA: %s (%s)"):format(e.name, e.reason)
+  local msg = ("DEATHNOTE: %s (%s)"):format(e.name, e.reason)
   Notify(msg, SOUNDKIT.RAID_WARNING)
   say(msg .. (e.author and (" |cff888888from " .. e.author .. "|r") or "") .. " |cff888888[" .. how .. "]|r")
   if how ~= "test" then SendSighting(e) end
@@ -358,7 +358,7 @@ local function TooltipUnit(tooltip)
   if not Enemy(unit) then return end
   local e = find(UnitGUID(unit), GetUnitName(unit, true))
   if e then
-    tooltip:AddLine("Persona non grata: " .. e.reason .. (e.author and (" (from " .. e.author .. ")") or ""), 1, 0.2, 0.2)
+    tooltip:AddLine("Deathnote: " .. e.reason .. (e.author and (" (from " .. e.author .. ")") or ""), 1, 0.2, 0.2)
   end
 end
 

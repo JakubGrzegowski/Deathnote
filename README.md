@@ -13,7 +13,7 @@ Add a player to your Deathnote with a short reason. From then on, whenever that 
 - **On-screen warning** in raid warning style, with the name and your reason
 - **Warning sound**, so you notice even mid-fight
 - **Skull marker** above their nameplate
-- **Tooltip line** "Persona non grata: reason" when you mouse over them
+- **Tooltip line** "Deathnote: reason" when you mouse over them
 
 Detection uses nameplates, your target and mouseover. Deathnote Forever also raises the enemy nameplate distance, so you spot your enemies as early as the game allows.
 

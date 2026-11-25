@@ -20,6 +20,15 @@ local CLASS_FACTION = { PALADIN = "Alliance", SHAMAN = "Horde" }
 local db, ui, lastSighting
 local byKey, byGUID, lastAlert, icons = {}, {}, {}, {}
 
+local function secret(v) return issecretvalue and issecretvalue(v) end
+local function open(v) if not secret(v) then return v end end
+-- Battlegrounds hide unit tokens, names and flags behind secret values.
+local function Enemy(unit)
+  if not unit or secret(unit) then return false end
+  local isPlayer, friend = UnitIsPlayer(unit), UnitIsFriend("player", unit)
+  if secret(isPlayer) or secret(friend) then return false end
+  return isPlayer and not friend
+end
 local function key(name) return name and (strsplit("-", name)):lower() end
 local function say(msg) print(PREFIX .. msg) end
 local function RefreshUI() if ui and ui:IsShown() then ui.Refresh() end end
@@ -39,6 +48,7 @@ local function Rebuild()
 end
 
 local function find(guid, name)
+  guid, name = open(guid), open(name) -- secret in battlegrounds
   local e = guid and byGUID[guid]
   if e then return e end
   e = name and byKey[key(name)]
@@ -224,8 +234,6 @@ local RACE_FACTION = { Human = "Alliance", Dwarf = "Alliance", NightElf = "Allia
   Orc = "Horde", Scourge = "Horde", Tauren = "Horde", Troll = "Horde" }
 local lastFight = {}
 
-local function open(v) if not (issecretvalue and issecretvalue(v)) then return v end end
-
 local function Fought(name, guid, killed, faction, class, classFile)
   local _, kind = IsInInstance()
   if not name or name == "" or kind == "pvp" or kind == "arena" then return end
@@ -250,10 +258,9 @@ local function Fought(name, guid, killed, faction, class, classFile)
 end
 
 local function OnUnitTarget(unit)
-  if issecretvalue and issecretvalue(unit) then return end
-  if not (unit == "target" or unit:find("^nameplate")) or not UnitAffectingCombat("player") then return end
-  if not UnitIsPlayer(unit) or UnitIsFriend("player", unit) or not UnitIsUnit(unit .. "target", "player") then return end
-  local faction = UnitFactionGroup(unit)
+  if not Enemy(unit) or not (unit == "target" or unit:find("^nameplate")) or not UnitAffectingCombat("player") then return end
+  if not open(UnitIsUnit(unit .. "target", "player")) then return end
+  local faction = open(UnitFactionGroup(unit))
   if faction == UnitFactionGroup("player") then return end -- duel
   local class, classFile = UnitClass(unit)
   Fought(open(GetUnitName(unit, true)), open(UnitGUID(unit)), false, faction, open(class), open(classFile))
@@ -294,14 +301,17 @@ end
 -- Own entries added by name get their faction and class once the player is seen.
 local function Learn(e, unit)
   if e.author or (e.faction and e.classFile) then return end
-  e.faction = e.faction or UnitFactionGroup(unit)
-  if not e.classFile then e.class, e.classFile = UnitClass(unit) end
+  e.faction = e.faction or open(UnitFactionGroup(unit))
+  if not e.classFile then
+    local class, classFile = UnitClass(unit)
+    e.class, e.classFile = open(class), open(classFile)
+  end
   ScheduleBroadcast()
   RefreshUI()
 end
 
 local function CheckUnit(unit, how)
-  if not UnitIsPlayer(unit) or UnitIsFriend("player", unit) then return end
+  if not Enemy(unit) then return end
   local e = find(UnitGUID(unit), GetUnitName(unit, true))
   if e then
     Learn(e, unit)
@@ -315,7 +325,7 @@ local function PlateAdded(unit, quiet)
   if not plate then return end
   local e
   if quiet then
-    e = UnitIsPlayer(unit) and not UnitIsFriend("player", unit) and find(UnitGUID(unit), GetUnitName(unit, true)) or nil
+    e = Enemy(unit) and find(UnitGUID(unit), GetUnitName(unit, true)) or nil
     if e then Learn(e, unit) end
   else
     e = CheckUnit(unit, "nameplate")
@@ -345,9 +355,7 @@ end
 
 local function TooltipUnit(tooltip)
   local _, unit = tooltip:GetUnit()
-  -- Instances hand tooltips secret unit tokens that addons may not pass to Unit* APIs.
-  if issecretvalue and issecretvalue(unit) then return end
-  if not (unit and UnitIsPlayer(unit)) or UnitIsFriend("player", unit) then return end
+  if not Enemy(unit) then return end
   local e = find(UnitGUID(unit), GetUnitName(unit, true))
   if e then
     tooltip:AddLine("Persona non grata: " .. e.reason .. (e.author and (" (from " .. e.author .. ")") or ""), 1, 0.2, 0.2)

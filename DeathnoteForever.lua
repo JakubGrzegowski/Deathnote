@@ -18,7 +18,7 @@ local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "
 local CLASS_FACTION = { PALADIN = "Alliance", SHAMAN = "Horde" }
 
 local db, ui, lastSighting
-local byKey, byGUID, lastAlert, icons = {}, {}, {}, {}
+local byKey, byGUID, lastAlert, reported, icons = {}, {}, {}, {}, {}
 
 local function secret(v) return issecretvalue and issecretvalue(v) end
 local function open(v) if not secret(v) then return v end end
@@ -202,14 +202,25 @@ local function Alert(e, how)
   local msg = ("DEATHNOTE: %s (%s)"):format(e.name, e.reason)
   Notify(msg, SOUNDKIT.RAID_WARNING)
   say(msg .. (e.author and (" |cff888888from " .. e.author .. "|r") or "") .. " |cff888888[" .. how .. "]|r")
-  if how ~= "test" then SendSighting(e) end
+  if how ~= "test" then
+    -- One report per target per group: random delay, skipped if a group member reported first.
+    -- ponytail: guild members outside the group miss our report when a group member wins.
+    C_Timer.After(math.random() * 2, function()
+      if GetTime() - (reported[k] or -REALERT) < REALERT then return end
+      SendSighting(e)
+      local g = db.announce and GroupChannel()
+      if g then SendChatMessage(("{rt8} Deathnote Forever: %s spotted nearby"):format(e.name), g) end
+    end)
+  end
   RefreshUI()
 end
 
-local function OnSighting(author, f)
+local function OnSighting(author, f, channel)
   local name = f[2]
   if not name or name == "" then return end
   local k = key(name)
+  if channel == "PARTY" or channel == "RAID" then reported[k] = GetTime() end
+  if GetTime() - (lastAlert[k] or -REALERT) < REALERT then return end -- we have just seen them ourselves
   local e = byKey[k]
   if not e then
     for a in pairs(db.shared) do if db.hidden[a .. "|" .. k] then return end end
@@ -377,7 +388,7 @@ local function Changed(own)
   if own then ScheduleBroadcast() end
 end
 
-local function OnComm(msg, sender)
+local function OnComm(msg, sender, channel)
   local author, source = Ambiguate(sender, "none"), Trusted(sender)
   -- UnitName returns only the first name on Forever, where names can have a surname.
   if author == GetUnitName("player", true) or not source then return end
@@ -428,7 +439,7 @@ local function OnComm(msg, sender)
     db.shared[author] = count > 0 and { updated = time(), entries = inc.entries, source = source } or nil
     Changed(false)
   elseif t == "S" then
-    OnSighting(author, f)
+    OnSighting(author, f, channel)
   end
 end
 
@@ -713,14 +724,32 @@ local function BuildUI()
   local tabs = {}
   for i, t in ipairs(TABS) do
     local b = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-    b:SetSize(96, 22)
-    b:SetPoint("TOPLEFT", 20 + (i - 1) * 100, -74)
+    b:SetSize(80, 22)
+    b:SetPoint("TOPLEFT", 20 + (i - 1) * 84, -74)
     b:SetScript("OnClick", function()
       ui.tab = t[1]
       ui.Refresh()
     end)
     tabs[i] = b
   end
+  local settingsBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
+  settingsBtn:SetSize(80, 22)
+  settingsBtn:SetPoint("TOPLEFT", 20 + #TABS * 84, -74)
+  settingsBtn:SetText("Settings")
+  settingsBtn:SetScript("OnClick", function()
+    ui.tab = "settings"
+    ui.Refresh()
+  end)
+
+  local panel = CreateFrame("Frame", nil, ui)
+  panel:SetPoint("TOPLEFT", 12, -104)
+  panel:SetPoint("BOTTOMRIGHT", -12, 40)
+  local announce = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  announce:SetPoint("TOPLEFT", 8, -4)
+  announce:SetScript("OnClick", function(self) db.announce = self:GetChecked() and true or false end)
+  local announceText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  announceText:SetPoint("LEFT", announce, "RIGHT", 4, 0)
+  announceText:SetText("Announce my sightings in party and raid chat")
 
   local sf = CreateFrame("ScrollFrame", nil, ui, "UIPanelScrollFrameTemplate")
   sf:SetPoint("TOPLEFT", 12, -104)
@@ -910,6 +939,16 @@ local function BuildUI()
       tabs[i]:SetText(("%s (%d)"):format(t[2], n))
       if ui.tab == t[1] then tabs[i]:LockHighlight() else tabs[i]:UnlockHighlight() end
     end
+    local settings = ui.tab == "settings"
+    if settings then settingsBtn:LockHighlight() else settingsBtn:UnlockHighlight() end
+    sf:SetShown(not settings)
+    count:SetShown(not settings)
+    panel:SetShown(settings)
+    if settings then
+      announce:SetChecked(db.announce)
+      unhide:Hide()
+      return
+    end
     local list, shown = TabRows(ui.tab), 0
     for i, e in ipairs(list) do
       local row = rows[i] or NewRow(i)
@@ -1032,6 +1071,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     db.shared = db.shared or {}
     db.hidden = db.hidden or {}
     db.recent = db.recent or {}
+    if db.announce == nil then db.announce = true end
     Rebuild()
     MinimapButton()
     C_ChatInfo.RegisterAddonMessagePrefix(COMM)
@@ -1064,7 +1104,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     end
     wasInGroup = now
   elseif event == "CHAT_MSG_ADDON" then
-    if arg == COMM then OnComm(arg2, arg4) end
+    if arg == COMM then OnComm(arg2, arg4, arg3) end
   elseif event == "NAME_PLATE_UNIT_ADDED" then PlateAdded(arg)
   elseif event == "NAME_PLATE_UNIT_REMOVED" then PlateRemoved(arg)
   elseif event == "UPDATE_MOUSEOVER_UNIT" then CheckUnit("mouseover", "mouseover")

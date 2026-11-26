@@ -26,6 +26,7 @@ Died and didn't catch the name? Open the **Recent** tab. Deathnote Forever remem
 Deathnote Forever users in your guild and party automatically exchange their lists. One player's enemy becomes everyone's enemy.
 
 - When a guild or party member spots someone from a list, you get a chat message with the **zone and coordinates**. If it happens in your zone, you also get an on-screen notice.
+- When you spot someone from your list while in a party or raid, Deathnote Forever posts "Name spotted nearby" in group chat, so members without the addon know too. When several of you spot the same player, only one reports it. Turn it off in the **Settings** tab.
 - Type **/deathnote way** to set a map waypoint to the latest sighting and go settle the score.
 - Only guild and party members can add entries to your lists. Strangers can't.
 
@@ -39,6 +40,7 @@ Open it with **/deathnote** or the minimap button.
 - **Last seen:** each entry remembers when and where the player was last spotted. Click the pin to set a waypoint there.
 - **Edit reasons:** click a reason to change it.
 - **Hide shared entries:** hide entries from others that you don't care about, for you only. Bring them back any time with **Unhide**.
+- **Settings:** switch the group chat announcement on or off.
 - **Test alert:** see and hear the warning before it matters.
 
 ## Commands

@@ -379,7 +379,8 @@ end
 
 local function OnComm(msg, sender)
   local author, source = Ambiguate(sender, "none"), Trusted(sender)
-  if author == UnitName("player") or not source then return end
+  -- UnitName returns only the first name on Forever, where names can have a surname.
+  if author == GetUnitName("player", true) or not source then return end
   local f = { strsplit("\t", msg) }
   for i = 2, #f do f[i] = clean(f[i], 250) end -- no escape codes from other clients
   local t, inc = f[1], incoming[author]
@@ -1046,6 +1047,8 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
       self:RegisterEvent(ev)
     end
   elseif event == "PLAYER_LOGIN" then
+    db.shared[GetUnitName("player", true)] = nil -- own list echoed back before 2.1.0
+    Rebuild()
     ApplyCVars()
     if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() elseif GuildRoster then GuildRoster() end
     wasInGroup = IsInGroup()

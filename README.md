@@ -34,13 +34,13 @@ Deathnote Forever users in your guild and party automatically exchange their lis
 
 Open it with **/deathnote** or the minimap button.
 
-- **Tabs:** Mine, Party, Guild, All and Recent. All is split into sections, so you always know where an entry came from. Party and Guild never repeat players already on your own list.
+- **Three panels:** tabs down the left side (Mine, Party, Guild, All, Recent and Settings) with a count each, the list in the middle, the selected player's profile on the right. All is split into sections, so you always know where an entry came from. Party and Guild never repeat players already on your own list.
 - **Faction and class:** pick them from a list for players you added by hand. They're also filled in automatically the first time you see the player.
 - **Class colours:** names are coloured by class at a glance.
-- **Columns and sorting:** level, kills, deaths, reason, where and when each player was last seen. Click a column header to sort by it, click again to reverse. Most recently seen players come first by default.
-- **Last seen:** each entry remembers when and where the player was last spotted. Click the pin to set a waypoint there.
-- **Sighting history:** click an entry to open its timeline, with every time and place the player was spotted, by you or by your guild and party. Click a sighting to set a waypoint there.
-- **Kill tally:** kills you land on a listed player are counted and announced in party chat, and so are the deaths they cause you, killer and assists alike. Both counts sit in the table, the tooltip and the sighting history.
+- **Columns and sorting:** level, kills, deaths, reason and when each player was last seen. Click a column header to sort by it, click again to reverse. Most recently seen players come first by default.
+- **Player profile:** click a row and the right hand panel shows that player, with kills, deaths and last seen on three tiles, their reason, and who wrote it.
+- **Sighting history:** under the profile sits every time and place the player was spotted, by you or by your guild and party. Click a sighting to set a waypoint there.
+- **Kill tally:** kills you land on a listed player are counted and announced in party chat, and so are the deaths they cause you, killer and assists alike. Both counts sit in the table, the row tooltip and the profile.
 - **Edit reasons:** click a reason to change it.
 - **Hide shared entries:** hide entries from others that you don't care about, for you only. Bring them back any time with **Unhide**.
 - **Settings:** switch the group chat announcement on or off.

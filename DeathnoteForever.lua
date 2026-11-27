@@ -18,7 +18,7 @@ local FACTION_ICON = { Alliance = "Interface\\Icons\\INV_BannerPVP_02", Horde = 
 local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 local CLASS_FACTION = { PALADIN = "Alliance", SHAMAN = "Horde" }
 
-local db, ui, timeline, lastSighting
+local db, ui, lastSighting
 local byKey, byGUID, lastAlert, reported, icons = {}, {}, {}, {}, {}
 
 local function secret(v) return issecretvalue and issecretvalue(v) end
@@ -34,7 +34,6 @@ local function key(name) return name and (strsplit("-", name)):lower() end
 local function say(msg) print(PREFIX .. msg) end
 local function RefreshUI()
   if ui and ui:IsShown() then ui.Refresh() end
-  if timeline and timeline:IsShown() then timeline.Refresh() end
 end
 -- Levels only go up; enemies far above us read -1 and are skipped.
 local function Raise(e, l)
@@ -787,100 +786,12 @@ StaticPopupDialogs.DEATHNOTEFOREVER_ISSUES = {
   hideOnEscape = true,
 }
 
--- Sighting history of one entry, newest first; a click on a record sets a waypoint there.
-local function ShowTimeline(e)
-  if timeline and timeline:IsShown() and timeline.e == e then return timeline:Hide() end
-  if not timeline then
-    local t = CreateFrame("Frame", "DeathnoteForeverTimeline", UIParent, "BasicFrameTemplateWithInset")
-    t:SetSize(400, 360)
-    t:SetFrameStrata("DIALOG")
-    t:SetMovable(true)
-    t:SetClampedToScreen(true)
-    t:EnableMouse(true)
-    t:RegisterForDrag("LeftButton")
-    t:SetScript("OnDragStart", t.StartMoving)
-    t:SetScript("OnDragStop", t.StopMovingOrSizing)
-    tinsert(UISpecialFrames, "DeathnoteForeverTimeline")
-    local title = t.TitleText or t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", 0, -5)
-    local info = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    info:SetPoint("TOPLEFT", 16, -32)
-    info:SetPoint("RIGHT", -16, 0)
-    info:SetJustifyH("LEFT")
-    local sf = CreateFrame("ScrollFrame", nil, t, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT", info, "BOTTOMLEFT", -4, -10)
-    sf:SetPoint("BOTTOMRIGHT", -32, 12)
-    local content = CreateFrame("Frame", nil, sf)
-    content:SetSize(350, 1)
-    sf:SetScrollChild(content)
-    local empty = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    empty:SetPoint("TOPLEFT", 4, -4)
-    empty:SetText("Not seen yet")
-    local rows = {}
-    function t.Refresh()
-      local e = t.e
-      local color = e.classFile and RAID_CLASS_COLORS[e.classFile]
-      title:SetText((color and color.colorStr and ("|c" .. color.colorStr) or "") .. e.name .. "|r")
-      local lines = {
-        ("Level %s %s, %s"):format(e.level or "?", e.class or "class unknown", e.faction or "faction unknown"),
-        "|cffff3333" .. e.reason .. "|r",
-      }
-      if e.slain then lines[#lines + 1] = ("|cff66ff66Killed by you %d time(s)|r"):format(e.slain) end
-      local deaths = e.deaths or e.kills
-      if deaths and deaths > 0 then lines[#lines + 1] = ("|cffff6666Killed you %d time(s)|r"):format(deaths) end
-      if e.author then lines[#lines + 1] = "|cff8888ffWritten by " .. e.author .. "|r" end
-      if e.added then lines[#lines + 1] = "|cff999999Added " .. date("%Y-%m-%d %H:%M", e.added) .. "|r" end
-      lines[#lines + 1] = "|cff66cc66Sightings, newest first. Click one to set a waypoint.|r"
-      info:SetText(table.concat(lines, "\n"))
-      local h = e.history or {}
-      for i = 1, #h do
-        local r = h[#h + 1 - i]
-        local row = rows[i]
-        if not row then
-          row = CreateFrame("Button", nil, content)
-          row:SetSize(350, 18)
-          row:SetPoint("TOPLEFT", 0, -(i - 1) * 18)
-          row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-          row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-          row.text:SetPoint("LEFT", 4, 0)
-          row.text:SetPoint("RIGHT", -4, 0)
-          row.text:SetJustifyH("LEFT")
-          row.text:SetWordWrap(false)
-          row:SetScript("OnClick", function(self) Waypoint(self.w) end)
-          rows[i] = row
-        end
-        row.w = { name = e.name, seenZone = r.seenZone, seenMap = r.seenMap, seenX = r.seenX, seenY = r.seenY }
-        row.text:SetText(("%s   %s %s%s"):format(date("%Y-%m-%d %H:%M", r.seen), r.seenZone or "?", Coords(r),
-          r.by and ("   |cff8888ff" .. r.by .. "|r") or ""))
-        row:Show()
-      end
-      for i = #h + 1, #rows do rows[i]:Hide() end
-      content:SetHeight(math.max(1, #h * 18))
-      empty:SetShown(#h == 0)
-    end
-    t:Hide()
-    timeline = t
-  end
-  if not timeline:IsShown() then
-    -- Left of the list, since row tooltips open on its right; the list moves over when there is no room.
-    local room = timeline:GetWidth() + 8
-    if ui:GetLeft() < room then
-      local top = ui:GetTop()
-      ui:ClearAllPoints()
-      ui:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", room, top)
-    end
-    timeline:ClearAllPoints()
-    timeline:SetPoint("TOPRIGHT", ui, "TOPLEFT", -4, 0)
-  end
-  timeline.e = e
-  timeline:Show()
-  timeline.Refresh()
-end
+local GOLD = { 0.82, 0.65, 0.32 }
 
 local function BuildUI()
-  local W, ROWH = 700, 20
+  local W, H, ROWH, NAV, DETAIL = 1040, 470, 20, 128, 280
   ui = CreateFrame("Frame", "DeathnoteForeverFrame", UIParent, "BasicFrameTemplateWithInset")
-  ui:SetSize(W, 440)
+  ui:SetSize(W, H)
   ui:SetPoint("CENTER")
   ui:SetFrameStrata("DIALOG")
   ui:SetMovable(true)
@@ -894,17 +805,54 @@ local function BuildUI()
   title:SetPoint("TOP", 0, -5)
   title:SetText("Deathnote Forever v" .. VERSION)
 
+  -- Dark panels separated by thin gold rules.
+  local function Panel(x1, y1, x2, y2)
+    local p = CreateFrame("Frame", nil, ui)
+    p:SetPoint("TOPLEFT", x1, y1)
+    p:SetPoint("BOTTOMRIGHT", x2, y2)
+    local bg = p:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0, 0, 0, 0.4)
+    return p
+  end
+  local function Rule(parent, y)
+    local t = parent:CreateTexture(nil, "ARTWORK")
+    t:SetHeight(1)
+    t:SetPoint("TOPLEFT", 8, y)
+    t:SetPoint("TOPRIGHT", -8, y)
+    t:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.5)
+    return t
+  end
+  local function Heading(parent, text, x, y)
+    local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fs:SetPoint("TOPLEFT", x, y)
+    fs:SetText(text)
+    fs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    return fs
+  end
   local function Label(text, x, y)
     local fs = ui:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     fs:SetPoint("TOPLEFT", x, y)
     fs:SetText(text)
   end
 
-  Label("Name (empty = your target)", 20, -32)
+  Label("Name", 20, -32)
   local nameBox = CreateFrame("EditBox", nil, ui, "InputBoxTemplate")
   nameBox:SetSize(130, 20)
   nameBox:SetPoint("TOPLEFT", 22, -46)
   nameBox:SetAutoFocus(false)
+  -- An empty box adds the current target, so show whose name would be taken.
+  local hint = nameBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  hint:SetPoint("LEFT", 2, 0)
+  hint:SetPoint("RIGHT", -2, 0)
+  hint:SetJustifyH("LEFT")
+  hint:SetWordWrap(false)
+  local function ShowHint()
+    local target = UnitIsPlayer("target") and open(GetUnitName("target", true))
+    hint:SetText(target and ("your target: " .. target) or "name or target")
+    hint:SetShown(nameBox:GetText() == "")
+  end
+  nameBox:SetScript("OnTextChanged", ShowHint)
 
   Label("Reason", 166, -32)
   local reasonBox = CreateFrame("EditBox", nil, ui, "InputBoxTemplate")
@@ -938,51 +886,71 @@ local function BuildUI()
   addBtn:SetPoint("TOPLEFT", 398, -45)
   addBtn:SetText("Add")
   addBtn:SetScript("OnClick", DoAdd)
+  addBtn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("Leave the name empty to add the player you have targeted")
+    GameTooltip:Show()
+  end)
+  addBtn:SetScript("OnLeave", GameTooltip_Hide)
+
+  -- Three panels: tabs down the left, the list in the middle, the selected player on the right.
+  local nav = Panel(12, -74, 12 + NAV - W, 40)
+  local list = Panel(12 + NAV + 8, -74, -(DETAIL + 20), 40)
+  local detail = Panel(W - DETAIL - 12, -74, -12, 40)
+  local panel = Panel(12 + NAV + 8, -74, -12, 40)
 
   ui.tab = "mine"
+  local function NavButton(i, label, onClick)
+    local b = CreateFrame("Button", nil, nav)
+    b:SetSize(NAV - 12, 22)
+    b:SetPoint("TOPLEFT", 6, -8 - (i - 1) * 24)
+    b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    b.sel = b:CreateTexture(nil, "BACKGROUND")
+    b.sel:SetAllPoints()
+    b.sel:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.25)
+    b.sel:Hide()
+    b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    b.text:SetPoint("LEFT", 8, 0)
+    b.text:SetText(label)
+    b.count = b:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    b.count:SetPoint("RIGHT", -8, 0)
+    b:SetScript("OnClick", onClick)
+    return b
+  end
   local tabs = {}
   for i, t in ipairs(TABS) do
-    local b = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-    b:SetSize(96, 22)
-    b:SetPoint("TOPLEFT", 20 + (i - 1) * 100, -74)
-    b:SetScript("OnClick", function()
+    tabs[i] = NavButton(i, t[2], function()
       ui.tab = t[1]
       ui.Refresh()
     end)
-    tabs[i] = b
   end
-  local settingsBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-  settingsBtn:SetSize(96, 22)
-  settingsBtn:SetPoint("TOPLEFT", 20 + #TABS * 100, -74)
-  settingsBtn:SetText("Settings")
-  settingsBtn:SetScript("OnClick", function()
+  Rule(nav, -12 - #TABS * 24)
+  local settingsBtn = NavButton(#TABS + 1.5, "Settings", function()
     ui.tab = "settings"
     ui.Refresh()
   end)
 
-  local panel = CreateFrame("Frame", nil, ui)
-  panel:SetPoint("TOPLEFT", 12, -104)
-  panel:SetPoint("BOTTOMRIGHT", -12, 40)
   local announce = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  announce:SetPoint("TOPLEFT", 8, -4)
+  announce:SetPoint("TOPLEFT", 8, -8)
   announce:SetScript("OnClick", function(self) db.announce = self:GetChecked() and true or false end)
   local announceText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   announceText:SetPoint("LEFT", announce, "RIGHT", 4, 0)
   announceText:SetText("Announce sightings and kills in party chat")
 
   -- Column headers: a click sorts by that column, a second click reverses it.
-  local COLUMNS = { { "name", "Name", 42, 100 }, { "level", "Lvl", 146, 26 }, { "slain", "Kills", 176, 32 },
-    { "deaths", "Deaths", 212, 44 }, { "reason", "Reason", 262, 178 }, { "zone", "Where", 444, 116 },
-    { "seen", "Last seen", 564, 44 } }
+  local COLUMNS = { { "name", "Name", 42, 110 }, { "level", "Lvl", 158, 26, "CENTER" },
+    { "slain", "Kills", 190, 30, "CENTER" }, { "deaths", "Deaths", 226, 34, "CENTER" },
+    { "reason", "Reason", 270, 190 }, { "seen", "Seen", 466, 50 } }
   local headers = {}
   for i, c in ipairs(COLUMNS) do
-    local b = CreateFrame("Button", nil, ui)
+    local b = CreateFrame("Button", nil, list)
     b:SetSize(c[4], 16)
-    b:SetPoint("TOPLEFT", 12 + c[3], -104)
+    b:SetPoint("TOPLEFT", c[3] + 4, -6)
     b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    b.text:SetPoint("LEFT")
+    b.text:SetPoint(c[5] or "LEFT")
     b.text:SetText(c[2])
+    b.text:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     b.arrow = b:CreateTexture(nil, "OVERLAY")
     b.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
     b.arrow:SetSize(9, 8)
@@ -997,28 +965,38 @@ local function BuildUI()
     end)
     headers[i] = b
   end
+  Rule(list, -24)
 
-  local sf = CreateFrame("ScrollFrame", nil, ui, "UIPanelScrollFrameTemplate")
-  sf:SetPoint("TOPLEFT", 12, -122)
-  sf:SetPoint("BOTTOMRIGHT", -32, 40)
+  local sf = CreateFrame("ScrollFrame", nil, list, "UIPanelScrollFrameTemplate")
+  sf:SetPoint("TOPLEFT", 4, -28)
+  sf:SetPoint("BOTTOMRIGHT", -26, 4)
   local content = CreateFrame("Frame", nil, sf)
-  content:SetSize(W - 44, 1)
+  local ROWW = W - DETAIL - 20 - (12 + NAV + 8) - 30
+  content:SetSize(ROWW, 1)
   sf:SetScrollChild(content)
 
   local rows = {}
-  local function Cell(row, x, width, font)
+  local function Cell(row, x, width, font, justify)
     local fs = row:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
     fs:SetPoint("LEFT", x, 0)
     fs:SetWidth(width)
-    fs:SetJustifyH("LEFT")
+    fs:SetJustifyH(justify or "LEFT")
     fs:SetWordWrap(false)
     return fs
   end
   local function NewRow(i)
     local row = CreateFrame("Button", nil, content)
-    row:SetSize(W - 44, ROWH)
+    row:SetSize(ROWW, ROWH)
     row:SetPoint("TOPLEFT", 0, -(i - 1) * ROWH)
     row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    row.sel = row:CreateTexture(nil, "BACKGROUND")
+    row.sel:SetAllPoints()
+    row.sel:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.18)
+    row.sel:Hide()
+    -- A class coloured strip on the left edge of every row.
+    row.strip = row:CreateTexture(nil, "ARTWORK")
+    row.strip:SetSize(2, ROWH - 4)
+    row.strip:SetPoint("LEFT", 0, 0)
 
     -- Faction and class icons; on own entries a click opens a list to choose from.
     local function IconButton(x, label, show, current, options, choose)
@@ -1044,18 +1022,18 @@ local function BuildUI()
       return b
     end
     local function Faction(e) return e.faction end
-    row.faction = IconButton(4, "Faction", Faction, Faction, FactionOptions, ChooseFaction)
-    row.class = IconButton(22, "Class", function(e) return e.class end, function(e) return e.classFile end,
+    row.faction = IconButton(6, "Faction", Faction, Faction, FactionOptions, ChooseFaction)
+    row.class = IconButton(24, "Class", function(e) return e.class end, function(e) return e.classFile end,
       function(e) return ClassOptions(e.faction) end, ChooseClass)
-    row.name = Cell(row, 42, 100)
-    row.level = Cell(row, 146, 24)
-    row.slain = Cell(row, 176, 32)
-    row.deaths = Cell(row, 212, 32)
+    row.name = Cell(row, 42, 110)
+    row.level = Cell(row, 158, 26, nil, "CENTER")
+    row.slain = Cell(row, 190, 30, nil, "CENTER")
+    row.deaths = Cell(row, 226, 34, nil, "CENTER")
 
     -- Own reasons are edited in place: Enter or clicking away saves, Escape reverts.
     local reason = CreateFrame("EditBox", nil, row)
-    reason:SetSize(178, ROWH)
-    reason:SetPoint("LEFT", 262, 0)
+    reason:SetSize(190, ROWH)
+    reason:SetPoint("LEFT", 270, 0)
     reason:SetAutoFocus(false)
     reason:SetMaxLetters(MAX_REASON)
     reason:SetFontObject("GameFontHighlightSmall")
@@ -1089,25 +1067,10 @@ local function BuildUI()
       self:ClearFocus()
     end)
     row.reason = reason
-
-    local pin = CreateFrame("Button", nil, row)
-    pin:SetSize(16, 16)
-    pin:SetPoint("LEFT", 444, 0)
-    pin:SetNormalTexture("Interface\\Icons\\INV_Misc_Map_01")
-    pin:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    pin:SetScript("OnClick", function() Waypoint(row.e) end)
-    pin:SetScript("OnEnter", function(self)
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:AddLine("Set a waypoint to the last sighting")
-      GameTooltip:Show()
-    end)
-    pin:SetScript("OnLeave", GameTooltip_Hide)
-    row.pin = pin
-    row.seen = Cell(row, 464, 96, "GameFontDisableSmall")
-    row.when = Cell(row, 564, 40, "GameFontDisableSmall")
+    row.when = Cell(row, 466, 50, "GameFontDisableSmall")
 
     local del = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    del:SetSize(22, 18)
+    del:SetSize(20, 18)
     del:SetPoint("RIGHT", -2, 0)
     del:SetText("X")
     del:SetScript("OnClick", function()
@@ -1118,18 +1081,21 @@ local function BuildUI()
       elseif e.author then HideShared(e) else Remove(e.name) end
     end)
     row.add = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    row.add:SetSize(22, 18)
+    row.add:SetSize(20, 18)
     row.add:SetPoint("RIGHT", del, "LEFT", -2, 0)
     row.add:SetText("+")
     row.add:SetScript("OnClick", function() Adopt(row.e) end)
     row.title = Cell(row, 4, 300, "GameFontNormal")
-    row.parts = { row.faction, row.class, row.name, row.level, row.slain, row.deaths, row.reason, row.pin,
-      row.seen, row.when, del }
-    row:SetScript("OnClick", function(self) if not self.e.suggest then ShowTimeline(self.e) end end)
+    row.parts = { row.faction, row.class, row.name, row.level, row.slain, row.deaths, row.reason, row.when,
+      row.strip, del }
+    row:SetScript("OnClick", function(self)
+      ui.sel = self.e
+      ui.Refresh()
+    end)
 
     row:SetScript("OnEnter", function(self)
       local e = self.e
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetOwner(self, "ANCHOR_LEFT") -- the profile panel sits on the right
       GameTooltip:AddLine(e.name)
       GameTooltip:AddLine(e.reason, 1, 0.2, 0.2, true)
       GameTooltip:AddLine((e.level and ("Level " .. e.level .. " ") or "") .. (e.faction or "faction unknown")
@@ -1153,12 +1119,119 @@ local function BuildUI()
       else
         GameTooltip:AddLine("Click the reason to edit it", 0.4, 0.8, 0.4)
       end
-      GameTooltip:AddLine("Click the row for the sighting history", 0.4, 0.8, 0.4)
+      GameTooltip:AddLine("Click the row to open the profile", 0.4, 0.8, 0.4)
       GameTooltip:Show()
     end)
     row:SetScript("OnLeave", GameTooltip_Hide)
     rows[i] = row
     return row
+  end
+
+  -- The right hand panel: who is selected, the two tallies and every sighting of them.
+  local dName = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  dName:SetPoint("TOPLEFT", 12, -12)
+  dName:SetWidth(DETAIL - 24)
+  dName:SetJustifyH("LEFT")
+  dName:SetWordWrap(false)
+  local dSub = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  dSub:SetPoint("TOPLEFT", 12, -36)
+  dSub:SetWidth(DETAIL - 24)
+  dSub:SetJustifyH("LEFT")
+  dSub:SetTextColor(0.8, 0.8, 0.8)
+
+  local TILES = { "KILLS", "DEATHS", "LAST SEEN" }
+  local tiles = {}
+  for i, cap in ipairs(TILES) do
+    local t = CreateFrame("Frame", nil, detail)
+    t:SetSize(84, 40)
+    t:SetPoint("TOPLEFT", 10 + (i - 1) * 88, -56)
+    local bg = t:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0, 0, 0, 0.45)
+    local label = t:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    label:SetPoint("TOP", 0, -5)
+    label:SetText(cap)
+    label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    t.value = t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    t.value:SetPoint("TOP", label, "BOTTOM", 0, -3)
+    tiles[i] = t
+  end
+
+  local dReason = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  dReason:SetPoint("TOPLEFT", 12, -104)
+  dReason:SetWidth(DETAIL - 24)
+  dReason:SetHeight(40)
+  dReason:SetJustifyH("LEFT")
+  dReason:SetJustifyV("TOP")
+  local dMeta = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  dMeta:SetPoint("TOPLEFT", 12, -148)
+  dMeta:SetWidth(DETAIL - 24)
+  dMeta:SetJustifyH("LEFT")
+
+  local dRule = Rule(detail, -184)
+  local dHead = Heading(detail, "Sightings, newest first", 12, -196)
+  local dsf = CreateFrame("ScrollFrame", nil, detail, "UIPanelScrollFrameTemplate")
+  dsf:SetPoint("TOPLEFT", 8, -212)
+  dsf:SetPoint("BOTTOMRIGHT", -26, 8)
+  local dContent = CreateFrame("Frame", nil, dsf)
+  dContent:SetSize(DETAIL - 40, 1)
+  dsf:SetScrollChild(dContent)
+  local dEmpty = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  dEmpty:SetPoint("CENTER")
+  dEmpty:SetText("Click a player on the list")
+  local dParts = { dName, dSub, dReason, dMeta, dRule, dHead, dsf, tiles[1], tiles[2], tiles[3] }
+  local dRows = {}
+
+  local function ShowDetail(e)
+    for _, part in ipairs(dParts) do part:SetShown(e ~= nil) end
+    dEmpty:SetShown(e == nil)
+    if not e then return end
+    local color = e.classFile and RAID_CLASS_COLORS[e.classFile]
+    dName:SetText((color and color.colorStr and ("|c" .. color.colorStr) or "|cffffffff") .. e.name .. "|r")
+    dSub:SetText(("Level %s %s %s"):format(e.level or "?", e.faction or "faction unknown",
+      e.class or "class unknown"))
+    tiles[1].value:SetText(e.slain or 0)
+    tiles[2].value:SetText(e.deaths or e.kills or 0)
+    tiles[3].value:SetText(Ago(e.seen))
+    dReason:SetText("|cffff5555" .. (e.reason or "") .. "|r")
+    local meta = {}
+    if e.author then meta[#meta + 1] = "Written by " .. e.author end
+    if e.added then meta[#meta + 1] = "Added " .. date("%Y-%m-%d", e.added) end
+    if e.seenZone then meta[#meta + 1] = "Last seen in " .. e.seenZone end
+    dMeta:SetText(table.concat(meta, "\n"))
+    local h = e.history or {}
+    for i = 1, #h do
+      local r = h[#h + 1 - i]
+      local row = dRows[i]
+      if not row then
+        row = CreateFrame("Button", nil, dContent)
+        row:SetSize(DETAIL - 40, 16)
+        row:SetPoint("TOPLEFT", 0, -(i - 1) * 16)
+        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.text:SetPoint("LEFT", 4, 0)
+        row.text:SetPoint("RIGHT", -4, 0)
+        row.text:SetJustifyH("LEFT")
+        row.text:SetWordWrap(false)
+        row:SetScript("OnClick", function(self) Waypoint(self.w) end)
+        row:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+          GameTooltip:AddLine(self.w.seenZone or "?")
+          GameTooltip:AddLine(Coords(self.w), 0.8, 0.8, 0.8)
+          GameTooltip:AddLine("Click to set a waypoint", 0.4, 0.8, 0.4)
+          GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", GameTooltip_Hide)
+        dRows[i] = row
+      end
+      row.w = { name = e.name, seenZone = r.seenZone, seenMap = r.seenMap, seenX = r.seenX, seenY = r.seenY }
+      row.text:SetText(("%s  %s%s"):format(date("%m-%d %H:%M", r.seen), r.seenZone or "?",
+        r.by and ("  |cff8888ff" .. r.by .. "|r") or ""))
+      row:Show()
+    end
+    for i = #h + 1, #dRows do dRows[i]:Hide() end
+    dContent:SetHeight(math.max(1, #h * 16))
+    dHead:SetText(#h > 0 and "Sightings, newest first" or "Not seen yet")
   end
 
   local count = ui:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -1194,17 +1267,17 @@ local function BuildUI()
     for i, t in ipairs(TABS) do
       local n = t[1] == "all" and total or #Entries(t[1])
       total = total + (t[3] and n or 0)
-      tabs[i]:SetText(("%s (%d)"):format(t[2], n))
-      if ui.tab == t[1] then tabs[i]:LockHighlight() else tabs[i]:UnlockHighlight() end
+      tabs[i].count:SetText(n)
+      tabs[i].sel:SetShown(ui.tab == t[1])
     end
     local settings = ui.tab == "settings"
-    if settings then settingsBtn:LockHighlight() else settingsBtn:UnlockHighlight() end
-    sf:SetShown(not settings)
-    count:SetShown(not settings)
+    settingsBtn.sel:SetShown(settings)
+    list:SetShown(not settings)
+    detail:SetShown(not settings)
     panel:SetShown(settings)
+    count:SetShown(not settings)
     for i, c in ipairs(COLUMNS) do
       local h = headers[i]
-      h:SetShown(not settings)
       h.arrow:SetShown(db.sortBy == c[1])
       if db.sortDesc then h.arrow:SetTexCoord(0, 0.5625, 0, 1) else h.arrow:SetTexCoord(0, 0.5625, 1, 0) end
     end
@@ -1213,8 +1286,8 @@ local function BuildUI()
       unhide:Hide()
       return
     end
-    local list, shown = TabRows(ui.tab), 0
-    for i, e in ipairs(list) do
+    local rowList, shown = TabRows(ui.tab), 0
+    for i, e in ipairs(rowList) do
       local row = rows[i] or NewRow(i)
       local header = e.header ~= nil
       row.e = not header and e or nil
@@ -1222,6 +1295,7 @@ local function BuildUI()
       row:EnableMouse(not header)
       for _, part in ipairs(row.parts) do part:SetShown(not header) end
       row.add:SetShown(not header and e.suggest == true)
+      row.sel:SetShown(not header and ui.sel == e)
       if header then
         row.title:SetText(e.header)
       else
@@ -1230,27 +1304,29 @@ local function BuildUI()
         local coords = e.classFile and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[e.classFile]
         SetIcon(row.class.tex, coords and CLASS_ICONS, coords)
         local color = e.classFile and RAID_CLASS_COLORS[e.classFile]
+        row.strip:SetColorTexture(color and color.r or 0.6, color and color.g or 0.6, color and color.b or 0.6, 0.9)
         row.name:SetText((color and color.colorStr and ("|c" .. color.colorStr) or "|cffffffff") .. e.name .. "|r")
         if not row.reason:HasFocus() then
           row.reason:SetText(e.author and ("|cff8888ff" .. e.author .. ":|r " .. e.reason) or e.reason)
+          row.reason:SetCursorPosition(0) -- an edit box scrolls to the cursor, so start at the front
         end
         row.reason:EnableMouse(not (e.author or e.suggest))
         row.level:SetText(e.level or "")
         row.slain:SetText(Tally(e.slain))
         row.deaths:SetText(Tally(e.deaths or e.kills))
-        row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "")
         row.when:SetText(Ago(e.seen))
-        row.pin:SetShown(e.seenMap ~= nil)
       end
       row:Show()
     end
-    for i = #list + 1, #rows do rows[i]:Hide() end
-    content:SetHeight(math.max(1, #list * ROWH))
+    for i = #rowList + 1, #rows do rows[i]:Hide() end
+    content:SetHeight(math.max(1, #rowList * ROWH))
     count:SetText(shown .. " on this tab")
+    ShowHint()
     local hidden = 0
     for _ in pairs(db.hidden) do hidden = hidden + 1 end
     unhide:SetText("Unhide (" .. hidden .. ")")
     unhide:SetShown(hidden > 0)
+    ShowDetail(ui.sel)
   end
   ui:SetScript("OnShow", ui.Refresh)
 end
@@ -1386,7 +1462,9 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
   elseif event == "NAME_PLATE_UNIT_ADDED" then PlateAdded(arg)
   elseif event == "NAME_PLATE_UNIT_REMOVED" then PlateRemoved(arg)
   elseif event == "UPDATE_MOUSEOVER_UNIT" then CheckUnit("mouseover", "mouseover")
-  elseif event == "PLAYER_TARGET_CHANGED" then CheckUnit("target", "target")
+  elseif event == "PLAYER_TARGET_CHANGED" then
+    CheckUnit("target", "target")
+    RefreshUI() -- the add box shows the target's name
   elseif event == "UNIT_TARGET" then OnUnitTarget(arg)
   elseif event == "UNIT_DIED" then OnUnitDied(arg)
   elseif event == "PLAYER_DEAD" then OnDeath()

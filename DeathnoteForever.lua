@@ -9,6 +9,7 @@ local COMM = "DNForever"
 local VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?"
 local MAX_REASON = 500
 local REALERT = 60
+local MAX_HISTORY = 50
 local SKULL = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8"
 local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 local CLASS_ICONS = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
@@ -17,7 +18,7 @@ local FACTION_ICON = { Alliance = "Interface\\Icons\\INV_BannerPVP_02", Horde = 
 local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 local CLASS_FACTION = { PALADIN = "Alliance", SHAMAN = "Horde" }
 
-local db, ui, lastSighting
+local db, ui, timeline, lastSighting
 local byKey, byGUID, lastAlert, reported, icons = {}, {}, {}, {}, {}
 
 local function secret(v) return issecretvalue and issecretvalue(v) end
@@ -31,7 +32,18 @@ local function Enemy(unit)
 end
 local function key(name) return name and (strsplit("-", name)):lower() end
 local function say(msg) print(PREFIX .. msg) end
-local function RefreshUI() if ui and ui:IsShown() then ui.Refresh() end end
+local function RefreshUI()
+  if ui and ui:IsShown() then ui.Refresh() end
+  if timeline and timeline:IsShown() then timeline.Refresh() end
+end
+-- Levels only go up; enemies far above us read -1 and are skipped.
+local function Raise(e, l)
+  l = tonumber(l)
+  if l and l > (e.level or 0) then
+    e.level = l
+    return true
+  end
+end
 
 -- Visible entries: own first, then those received from others unless hidden.
 local function Rebuild()
@@ -136,7 +148,7 @@ local function SendList(channel, target, wantReply)
     local name = clean(e.name, 40)
     local parts = chunks(clean(e.reason, MAX_REASON * 2), 180)
     Send(table.concat({ "E", s, name, #parts, clean(e.faction, 10), clean(e.class, 20), clean(e.guid, 40),
-      clean(e.classFile, 20) }, "\t"), channel, target)
+      clean(e.classFile, 20), e.level or "" }, "\t"), channel, target)
     for i, part in ipairs(parts) do Send(table.concat({ "R", s, key(name), i, part }, "\t"), channel, target) end
   end
   Send("Z\t" .. s, channel, target)
@@ -157,7 +169,7 @@ end
 
 local function SendSighting(e)
   local msg = table.concat({ "S", clean(e.name, 40), clean(e.reason, 100), clean(e.seenZone, 40),
-    e.seenMap or "", e.seenMap and ("%.4f"):format(e.seenX) or "", e.seenMap and ("%.4f"):format(e.seenY) or "" }, "\t")
+    e.seenMap or "", e.seenMap and ("%.4f"):format(e.seenX) or "", e.seenMap and ("%.4f"):format(e.seenY) or "", e.level or "" }, "\t")
   if IsInGuild() then Send(msg, "GUILD") end
   local g = GroupChannel()
   if g then Send(msg, g) end
@@ -178,6 +190,11 @@ local function SourceOf(author, list) return list.source or Trusted(author) or "
 
 -- Alerts ----------------------------------------------------------------------
 
+-- Party, not raid, even inside a raid: only party chat draws a bubble over our head.
+-- A real party too, since "PARTY" in a battleground or LFG group lands in instance chat.
+local function Announce(msg)
+  if db.announce and IsInGroup(LE_PARTY_CATEGORY_HOME or 1) then SendChatMessage(msg, "PARTY") end
+end
 local function Notify(msg, sound)
   RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo.RAID_WARNING)
   PlaySound(sound, "Master")
@@ -194,11 +211,22 @@ local function Stamp(e)
   if x and x > 0 then e.seenMap, e.seenX, e.seenY = map, x, y else e.seenMap, e.seenX, e.seenY = nil end
 end
 
+-- Sighting history, oldest first. Repeated sightings in one zone within 10 minutes are one record.
+local function Log(e, by)
+  local h = e.history or {}
+  e.history = h
+  local last = h[#h]
+  if last and last.by == by and last.seenZone == e.seenZone and e.seen - last.seen < 600 then h[#h] = nil end
+  h[#h + 1] = { seen = e.seen, seenZone = e.seenZone, seenMap = e.seenMap, seenX = e.seenX, seenY = e.seenY, by = by }
+  if #h > MAX_HISTORY then table.remove(h, 1) end
+end
+
 local function Alert(e, how)
   local k, now = key(e.name), GetTime()
   if now - (lastAlert[k] or -REALERT) < REALERT then return end
   lastAlert[k] = now
   Stamp(e)
+  Log(e)
   local msg = ("DEATHNOTE: %s (%s)"):format(e.name, e.reason)
   Notify(msg, SOUNDKIT.RAID_WARNING)
   say(msg .. (e.author and (" |cff888888from " .. e.author .. "|r") or "") .. " |cff888888[" .. how .. "]|r")
@@ -208,8 +236,7 @@ local function Alert(e, how)
     C_Timer.After(math.random() * 2, function()
       if GetTime() - (reported[k] or -REALERT) < REALERT then return end
       SendSighting(e)
-      local g = db.announce and GroupChannel()
-      if g then SendChatMessage(("{rt8} Deathnote Forever: %s spotted nearby"):format(e.name), g) end
+      Announce(("{rt8} Deathnote Forever: %s spotted nearby"):format(e.name))
     end)
   end
   RefreshUI()
@@ -229,6 +256,8 @@ local function OnSighting(author, f, channel)
   local map, x, y = tonumber(f[5]), tonumber(f[6]), tonumber(f[7])
   e.seen, e.seenZone = time(), f[4]
   if map and x and y then e.seenMap, e.seenX, e.seenY = map, x, y else e.seenMap, e.seenX, e.seenY = nil end
+  Raise(e, f[8])
+  Log(e, author)
   lastSighting = e
   local msg = ("%s spotted %s (%s) in %s %s"):format(author, e.name, e.reason, e.seenZone or "?", Coords(e))
   say(msg .. (e.seenMap and " - /deathnote way" or ""))
@@ -245,11 +274,18 @@ local RACE_FACTION = { Human = "Alliance", Dwarf = "Alliance", NightElf = "Allia
   Orc = "Horde", Scourge = "Horde", Tauren = "Horde", Troll = "Horde" }
 local lastFight = {}
 
-local function Fought(name, guid, killed, faction, class, classFile)
+local function Fought(name, guid, killed, faction, class, classFile, level)
   local _, kind = IsInInstance()
   if not name or name == "" or kind == "pvp" or kind == "arena" then return end
   name = Ambiguate(name, "none")
   local k = key(name)
+  -- Everyone in the death recap hit us, so killer and assists alike count as killing us.
+  local listed = find(guid, name)
+  if listed then
+    if killed then listed.deaths = (listed.deaths or 0) + 1 end
+    Raise(listed, level)
+    return RefreshUI()
+  end
   local e = db.recent[k]
   if not killed and e and GetTime() - (lastFight[k] or -FIGHT_GAP) < FIGHT_GAP then return end
   lastFight[k] = GetTime()
@@ -257,6 +293,7 @@ local function Fought(name, guid, killed, faction, class, classFile)
   if killed then e.kills = e.kills + 1 else e.fights = e.fights + 1 end
   e.guid, e.faction = guid or e.guid, faction or e.faction
   e.class, e.classFile = class or e.class, classFile or e.classFile
+  Raise(e, level)
   Stamp(e)
   db.recent[k] = e
   local n, oldest = 0, nil
@@ -274,7 +311,8 @@ local function OnUnitTarget(unit)
   local faction = open(UnitFactionGroup(unit))
   if faction == UnitFactionGroup("player") then return end -- duel
   local class, classFile = UnitClass(unit)
-  Fought(open(GetUnitName(unit, true)), open(UnitGUID(unit)), false, faction, open(class), open(classFile))
+  Fought(open(GetUnitName(unit, true)), open(UnitGUID(unit)), false, faction, open(class), open(classFile),
+    open(UnitLevel(unit)))
 end
 
 -- The combat log is closed on Forever, but the death recap lists who hit us.
@@ -323,12 +361,64 @@ end
 
 local function CheckUnit(unit, how)
   if not Enemy(unit) then return end
-  local e = find(UnitGUID(unit), GetUnitName(unit, true))
+  local name = open(GetUnitName(unit, true))
+  local e = find(UnitGUID(unit), name)
+  -- The death recap never tells us a level, so Recent entries learn it here.
+  local r = name and db.recent[key(name)]
+  if r and Raise(r, open(UnitLevel(unit))) then RefreshUI() end
   if e then
     Learn(e, unit)
+    Raise(e, open(UnitLevel(unit)))
     Alert(e, how)
   end
   return e
+end
+
+-- /dnf debug: the decisions below, on the chat frame and in the saved variables.
+-- Kept in the saved variables too, so a whole run can be read from the file after a /reload.
+local function Debug(msg, quiet)
+  if not db.debug then return end
+  if not quiet then say("|cff888888dbg " .. msg .. "|r") end
+  local log = db.log or {}
+  db.log = log
+  log[#log + 1] = date("%H:%M:%S ") .. msg
+  if #log > 500 then table.remove(log, 1) end
+end
+
+-- No combat log and health is a secret value here, but UNIT_DIED carries the GUID of whoever
+-- just died. So a kill is a listed player dying while we were on them.
+-- ponytail: someone else landing the last hit on our target counts as ours; no way to tell.
+local ENGAGED, KILL_GAP = 20, 15
+local engaged, killed = {}, {}
+
+local function Kill(e, guid)
+  local k = key(e.name)
+  if GetTime() - (killed[k] or -KILL_GAP) < KILL_GAP then return end
+  killed[k], engaged[guid] = GetTime(), nil
+  e.slain = (e.slain or 0) + 1
+  say(("you killed %s (%d)"):format(e.name, e.slain))
+  Announce(("{rt8} Deathnote Forever: %s killed (%d)"):format(e.name, e.slain))
+  RefreshUI()
+end
+
+local function OnUnitDied(guid)
+  guid = open(guid)
+  if type(guid) ~= "string" or not guid:find("^Player%-") then return end
+  local fought = engaged[guid] and GetTime() - engaged[guid] < ENGAGED
+  local e = fought and byGUID[guid]
+  Debug(("died %s, fought %s, listed %s"):format(guid, tostring(fought and true or false), tostring(e ~= nil)))
+  if e then Kill(e, guid) end
+end
+
+-- Who we are on right now, so UNIT_DIED can be pinned on them.
+local function CheckKill()
+  if not UnitAffectingCombat("player") or UnitIsDeadOrGhost("player") then return end
+  local guid = open(UnitGUID("target"))
+  if not guid or not Enemy("target") then return end
+  local e = find(guid, GetUnitName("target", true))
+  if not e then return end
+  if not engaged[guid] then Debug("engaged " .. e.name, true) end
+  engaged[guid] = GetTime()
 end
 
 local function PlateAdded(unit, quiet)
@@ -337,7 +427,10 @@ local function PlateAdded(unit, quiet)
   local e
   if quiet then
     e = Enemy(unit) and find(UnitGUID(unit), GetUnitName(unit, true)) or nil
-    if e then Learn(e, unit) end
+    if e then
+      Learn(e, unit)
+      Raise(e, open(UnitLevel(unit)))
+    end
   else
     e = CheckUnit(unit, "nameplate")
   end
@@ -412,7 +505,7 @@ local function OnComm(msg, sender, channel)
     if inc and inc.serial == f[2] and f[3] and f[3] ~= "" then
       inc.entries[key(f[3])] = { name = f[3], nparts = tonumber(f[4]) or 0, parts = {},
         faction = f[5] ~= "" and f[5] or nil, class = f[6] ~= "" and f[6] or nil, guid = f[7] ~= "" and f[7] or nil,
-        classFile = f[8] ~= "" and f[8] or nil }
+        classFile = f[8] ~= "" and f[8] or nil, level = tonumber(f[9]) }
     end
   elseif t == "R" then
     local e = inc and inc.serial == f[2] and inc.entries[f[3] or ""]
@@ -434,7 +527,11 @@ local function OnComm(msg, sender, channel)
     local old = db.shared[author]
     for k, e in pairs(inc.entries) do
       local o = old and old.entries[k]
-      if o then e.seen, e.seenZone, e.seenMap, e.seenX, e.seenY = o.seen, o.seenZone, o.seenMap, o.seenX, o.seenY end
+      if o then
+        e.seen, e.seenZone, e.seenMap, e.seenX, e.seenY = o.seen, o.seenZone, o.seenMap, o.seenX, o.seenY
+        e.history, e.slain, e.deaths = o.history, o.slain, o.deaths
+        Raise(e, o.level)
+      end
     end
     db.shared[author] = count > 0 and { updated = time(), entries = inc.entries, source = source } or nil
     Changed(false)
@@ -453,6 +550,7 @@ local function Put(name, reason, unit)
   if unit then
     e.name, e.guid, e.faction = name, UnitGUID(unit), UnitFactionGroup(unit)
     e.class, e.classFile = UnitClass(unit)
+    Raise(e, open(UnitLevel(unit)))
   end
   db.players[k] = e
   say(("saved %s (%s)"):format(e.name, e.reason))
@@ -473,6 +571,8 @@ local function Adopt(e)
   local p = db.players[k]
   p.guid, p.faction, p.class, p.classFile = e.guid, e.faction, e.class, e.classFile
   p.seen, p.seenZone, p.seenMap, p.seenX, p.seenY = e.seen, e.seenZone, e.seenMap, e.seenX, e.seenY
+  Raise(p, e.level)
+  Log(p)
   db.recent[k] = nil
   Changed(true)
 end
@@ -600,6 +700,35 @@ local function SuggestReason(e)
   return e.kills > 0 and ("killed you" .. n(e.kills)) or ("attacked you" .. n(e.fights))
 end
 
+local SORTS = {
+  name = function(e) return e.name:lower() end,
+  level = function(e) return e.level or 0 end,
+  slain = function(e) return e.slain or 0 end,
+  deaths = function(e) return e.deaths or e.kills or 0 end,
+  reason = function(e) return (e.reason or ""):lower() end,
+  zone = function(e) return (e.seenZone or ""):lower() end,
+  seen = function(e) return e.seen or 0 end,
+}
+
+local function Before(a, b)
+  local f = SORTS[db.sortBy] or SORTS.seen
+  local x, y = f(a), f(b)
+  if x == y then return a.name:lower() < b.name:lower() end
+  if db.sortDesc then return x > y end
+  return x < y
+end
+
+local DESC = { seen = true, level = true, slain = true, deaths = true }
+local function Tally(n) return (n and n > 0) and tostring(n) or "" end
+
+local function Ago(t)
+  if not t then return "never" end
+  local s = time() - t
+  if s < 3600 then return math.floor(s / 60) .. "m ago" end
+  if s < 86400 then return math.floor(s / 3600) .. "h ago" end
+  return math.floor(s / 86400) .. "d ago"
+end
+
 local function Entries(tab)
   local list = {}
   if tab == "recent" then
@@ -609,7 +738,7 @@ local function Entries(tab)
         list[#list + 1] = e
       end
     end
-    table.sort(list, function(a, b) return a.seen > b.seen end)
+    table.sort(list, Before)
     return list
   elseif tab == "mine" then
     for _, e in pairs(db.players) do list[#list + 1] = e end
@@ -622,7 +751,7 @@ local function Entries(tab)
       end
     end
   end
-  table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+  table.sort(list, Before)
   return list
 end
 
@@ -658,8 +787,98 @@ StaticPopupDialogs.DEATHNOTEFOREVER_ISSUES = {
   hideOnEscape = true,
 }
 
+-- Sighting history of one entry, newest first; a click on a record sets a waypoint there.
+local function ShowTimeline(e)
+  if timeline and timeline:IsShown() and timeline.e == e then return timeline:Hide() end
+  if not timeline then
+    local t = CreateFrame("Frame", "DeathnoteForeverTimeline", UIParent, "BasicFrameTemplateWithInset")
+    t:SetSize(400, 360)
+    t:SetFrameStrata("DIALOG")
+    t:SetMovable(true)
+    t:SetClampedToScreen(true)
+    t:EnableMouse(true)
+    t:RegisterForDrag("LeftButton")
+    t:SetScript("OnDragStart", t.StartMoving)
+    t:SetScript("OnDragStop", t.StopMovingOrSizing)
+    tinsert(UISpecialFrames, "DeathnoteForeverTimeline")
+    local title = t.TitleText or t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    title:SetPoint("TOP", 0, -5)
+    local info = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    info:SetPoint("TOPLEFT", 16, -32)
+    info:SetPoint("RIGHT", -16, 0)
+    info:SetJustifyH("LEFT")
+    local sf = CreateFrame("ScrollFrame", nil, t, "UIPanelScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT", info, "BOTTOMLEFT", -4, -10)
+    sf:SetPoint("BOTTOMRIGHT", -32, 12)
+    local content = CreateFrame("Frame", nil, sf)
+    content:SetSize(350, 1)
+    sf:SetScrollChild(content)
+    local empty = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    empty:SetPoint("TOPLEFT", 4, -4)
+    empty:SetText("Not seen yet")
+    local rows = {}
+    function t.Refresh()
+      local e = t.e
+      local color = e.classFile and RAID_CLASS_COLORS[e.classFile]
+      title:SetText((color and color.colorStr and ("|c" .. color.colorStr) or "") .. e.name .. "|r")
+      local lines = {
+        ("Level %s %s, %s"):format(e.level or "?", e.class or "class unknown", e.faction or "faction unknown"),
+        "|cffff3333" .. e.reason .. "|r",
+      }
+      if e.slain then lines[#lines + 1] = ("|cff66ff66Killed by you %d time(s)|r"):format(e.slain) end
+      local deaths = e.deaths or e.kills
+      if deaths and deaths > 0 then lines[#lines + 1] = ("|cffff6666Killed you %d time(s)|r"):format(deaths) end
+      if e.author then lines[#lines + 1] = "|cff8888ffWritten by " .. e.author .. "|r" end
+      if e.added then lines[#lines + 1] = "|cff999999Added " .. date("%Y-%m-%d %H:%M", e.added) .. "|r" end
+      lines[#lines + 1] = "|cff66cc66Sightings, newest first. Click one to set a waypoint.|r"
+      info:SetText(table.concat(lines, "\n"))
+      local h = e.history or {}
+      for i = 1, #h do
+        local r = h[#h + 1 - i]
+        local row = rows[i]
+        if not row then
+          row = CreateFrame("Button", nil, content)
+          row:SetSize(350, 18)
+          row:SetPoint("TOPLEFT", 0, -(i - 1) * 18)
+          row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+          row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+          row.text:SetPoint("LEFT", 4, 0)
+          row.text:SetPoint("RIGHT", -4, 0)
+          row.text:SetJustifyH("LEFT")
+          row.text:SetWordWrap(false)
+          row:SetScript("OnClick", function(self) Waypoint(self.w) end)
+          rows[i] = row
+        end
+        row.w = { name = e.name, seenZone = r.seenZone, seenMap = r.seenMap, seenX = r.seenX, seenY = r.seenY }
+        row.text:SetText(("%s   %s %s%s"):format(date("%Y-%m-%d %H:%M", r.seen), r.seenZone or "?", Coords(r),
+          r.by and ("   |cff8888ff" .. r.by .. "|r") or ""))
+        row:Show()
+      end
+      for i = #h + 1, #rows do rows[i]:Hide() end
+      content:SetHeight(math.max(1, #h * 18))
+      empty:SetShown(#h == 0)
+    end
+    t:Hide()
+    timeline = t
+  end
+  if not timeline:IsShown() then
+    -- Left of the list, since row tooltips open on its right; the list moves over when there is no room.
+    local room = timeline:GetWidth() + 8
+    if ui:GetLeft() < room then
+      local top = ui:GetTop()
+      ui:ClearAllPoints()
+      ui:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", room, top)
+    end
+    timeline:ClearAllPoints()
+    timeline:SetPoint("TOPRIGHT", ui, "TOPLEFT", -4, 0)
+  end
+  timeline.e = e
+  timeline:Show()
+  timeline.Refresh()
+end
+
 local function BuildUI()
-  local W, ROWH = 540, 20
+  local W, ROWH = 700, 20
   ui = CreateFrame("Frame", "DeathnoteForeverFrame", UIParent, "BasicFrameTemplateWithInset")
   ui:SetSize(W, 440)
   ui:SetPoint("CENTER")
@@ -724,8 +943,8 @@ local function BuildUI()
   local tabs = {}
   for i, t in ipairs(TABS) do
     local b = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-    b:SetSize(80, 22)
-    b:SetPoint("TOPLEFT", 20 + (i - 1) * 84, -74)
+    b:SetSize(96, 22)
+    b:SetPoint("TOPLEFT", 20 + (i - 1) * 100, -74)
     b:SetScript("OnClick", function()
       ui.tab = t[1]
       ui.Refresh()
@@ -733,8 +952,8 @@ local function BuildUI()
     tabs[i] = b
   end
   local settingsBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
-  settingsBtn:SetSize(80, 22)
-  settingsBtn:SetPoint("TOPLEFT", 20 + #TABS * 84, -74)
+  settingsBtn:SetSize(96, 22)
+  settingsBtn:SetPoint("TOPLEFT", 20 + #TABS * 100, -74)
   settingsBtn:SetText("Settings")
   settingsBtn:SetScript("OnClick", function()
     ui.tab = "settings"
@@ -749,10 +968,38 @@ local function BuildUI()
   announce:SetScript("OnClick", function(self) db.announce = self:GetChecked() and true or false end)
   local announceText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   announceText:SetPoint("LEFT", announce, "RIGHT", 4, 0)
-  announceText:SetText("Announce my sightings in party and raid chat")
+  announceText:SetText("Announce sightings and kills in party chat")
+
+  -- Column headers: a click sorts by that column, a second click reverses it.
+  local COLUMNS = { { "name", "Name", 42, 100 }, { "level", "Lvl", 146, 26 }, { "slain", "Kills", 176, 32 },
+    { "deaths", "Deaths", 212, 44 }, { "reason", "Reason", 262, 178 }, { "zone", "Where", 444, 116 },
+    { "seen", "Last seen", 564, 44 } }
+  local headers = {}
+  for i, c in ipairs(COLUMNS) do
+    local b = CreateFrame("Button", nil, ui)
+    b:SetSize(c[4], 16)
+    b:SetPoint("TOPLEFT", 12 + c[3], -104)
+    b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    b.text:SetPoint("LEFT")
+    b.text:SetText(c[2])
+    b.arrow = b:CreateTexture(nil, "OVERLAY")
+    b.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    b.arrow:SetSize(9, 8)
+    b.arrow:SetPoint("LEFT", b.text, "RIGHT", 3, 0)
+    b:SetScript("OnClick", function()
+      if db.sortBy == c[1] then
+        db.sortDesc = not db.sortDesc
+      else
+        db.sortBy, db.sortDesc = c[1], DESC[c[1]] or false
+      end
+      ui.Refresh()
+    end)
+    headers[i] = b
+  end
 
   local sf = CreateFrame("ScrollFrame", nil, ui, "UIPanelScrollFrameTemplate")
-  sf:SetPoint("TOPLEFT", 12, -104)
+  sf:SetPoint("TOPLEFT", 12, -122)
   sf:SetPoint("BOTTOMRIGHT", -32, 40)
   local content = CreateFrame("Frame", nil, sf)
   content:SetSize(W - 44, 1)
@@ -801,11 +1048,14 @@ local function BuildUI()
     row.class = IconButton(22, "Class", function(e) return e.class end, function(e) return e.classFile end,
       function(e) return ClassOptions(e.faction) end, ChooseClass)
     row.name = Cell(row, 42, 100)
+    row.level = Cell(row, 146, 24)
+    row.slain = Cell(row, 176, 32)
+    row.deaths = Cell(row, 212, 32)
 
     -- Own reasons are edited in place: Enter or clicking away saves, Escape reverts.
     local reason = CreateFrame("EditBox", nil, row)
-    reason:SetSize(190, ROWH)
-    reason:SetPoint("LEFT", 146, 0)
+    reason:SetSize(178, ROWH)
+    reason:SetPoint("LEFT", 262, 0)
     reason:SetAutoFocus(false)
     reason:SetMaxLetters(MAX_REASON)
     reason:SetFontObject("GameFontHighlightSmall")
@@ -842,7 +1092,7 @@ local function BuildUI()
 
     local pin = CreateFrame("Button", nil, row)
     pin:SetSize(16, 16)
-    pin:SetPoint("LEFT", 342, 0)
+    pin:SetPoint("LEFT", 444, 0)
     pin:SetNormalTexture("Interface\\Icons\\INV_Misc_Map_01")
     pin:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     pin:SetScript("OnClick", function() Waypoint(row.e) end)
@@ -853,7 +1103,8 @@ local function BuildUI()
     end)
     pin:SetScript("OnLeave", GameTooltip_Hide)
     row.pin = pin
-    row.seen = Cell(row, 362, 78, "GameFontDisableSmall")
+    row.seen = Cell(row, 464, 96, "GameFontDisableSmall")
+    row.when = Cell(row, 564, 40, "GameFontDisableSmall")
 
     local del = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     del:SetSize(22, 18)
@@ -872,14 +1123,20 @@ local function BuildUI()
     row.add:SetText("+")
     row.add:SetScript("OnClick", function() Adopt(row.e) end)
     row.title = Cell(row, 4, 300, "GameFontNormal")
-    row.parts = { row.faction, row.class, row.name, row.reason, row.pin, row.seen, del }
+    row.parts = { row.faction, row.class, row.name, row.level, row.slain, row.deaths, row.reason, row.pin,
+      row.seen, row.when, del }
+    row:SetScript("OnClick", function(self) if not self.e.suggest then ShowTimeline(self.e) end end)
 
     row:SetScript("OnEnter", function(self)
       local e = self.e
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
       GameTooltip:AddLine(e.name)
       GameTooltip:AddLine(e.reason, 1, 0.2, 0.2, true)
-      GameTooltip:AddLine((e.faction or "faction unknown") .. (e.class and (" " .. e.class) or ""), 0.8, 0.8, 0.8)
+      GameTooltip:AddLine((e.level and ("Level " .. e.level .. " ") or "") .. (e.faction or "faction unknown")
+        .. (e.class and (" " .. e.class) or ""), 0.8, 0.8, 0.8)
+      if e.slain then GameTooltip:AddLine(("Killed by you %d time(s)"):format(e.slain), 0.4, 1, 0.4) end
+      local deaths = e.deaths or e.kills
+      if deaths and deaths > 0 then GameTooltip:AddLine(("Killed you %d time(s)"):format(deaths), 1, 0.4, 0.4) end
       if e.author then GameTooltip:AddLine("Written by " .. e.author, 0.6, 0.6, 1) end
       if e.suggest then
         GameTooltip:AddLine("Last fight " .. date("%Y-%m-%d %H:%M", e.seen) .. " " .. (e.seenZone or ""), 0.6, 0.6, 0.6)
@@ -896,6 +1153,7 @@ local function BuildUI()
       else
         GameTooltip:AddLine("Click the reason to edit it", 0.4, 0.8, 0.4)
       end
+      GameTooltip:AddLine("Click the row for the sighting history", 0.4, 0.8, 0.4)
       GameTooltip:Show()
     end)
     row:SetScript("OnLeave", GameTooltip_Hide)
@@ -944,6 +1202,12 @@ local function BuildUI()
     sf:SetShown(not settings)
     count:SetShown(not settings)
     panel:SetShown(settings)
+    for i, c in ipairs(COLUMNS) do
+      local h = headers[i]
+      h:SetShown(not settings)
+      h.arrow:SetShown(db.sortBy == c[1])
+      if db.sortDesc then h.arrow:SetTexCoord(0, 0.5625, 0, 1) else h.arrow:SetTexCoord(0, 0.5625, 1, 0) end
+    end
     if settings then
       announce:SetChecked(db.announce)
       unhide:Hide()
@@ -971,7 +1235,11 @@ local function BuildUI()
           row.reason:SetText(e.author and ("|cff8888ff" .. e.author .. ":|r " .. e.reason) or e.reason)
         end
         row.reason:EnableMouse(not (e.author or e.suggest))
-        row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "never seen")
+        row.level:SetText(e.level or "")
+        row.slain:SetText(Tally(e.slain))
+        row.deaths:SetText(Tally(e.deaths or e.kills))
+        row.seen:SetText(e.seen and ((e.seenZone or "") .. " " .. Coords(e)) or "")
+        row.when:SetText(Ago(e.seen))
         row.pin:SetShown(e.seenMap ~= nil)
       end
       row:Show()
@@ -1047,6 +1315,10 @@ SlashCmdList.DEATHNOTEFOREVER = function(msg)
     Put(name, reason)
   elseif cmd == "del" then
     Remove(rest ~= "" and rest or (UnitIsPlayer("target") and GetUnitName("target", true)) or nil)
+  elseif cmd == "debug" then
+    db.debug = not db.debug
+    db.log = db.debug and {} or nil
+    say("debug " .. (db.debug and "on, logging to the saved variables" or "off"))
   elseif cmd == "way" then
     Waypoint(lastSighting)
   else
@@ -1072,10 +1344,16 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     db.hidden = db.hidden or {}
     db.recent = db.recent or {}
     if db.announce == nil then db.announce = true end
+    if not db.sortBy then db.sortBy, db.sortDesc = "seen", true end
+    local lists = { db.players }
+    for _, l in pairs(db.shared) do lists[#lists + 1] = l.entries end
+    for _, l in ipairs(lists) do
+      for _, e in pairs(l) do if e.seen and not e.history then Log(e) end end -- sightings before 2.2.0
+    end
     Rebuild()
     MinimapButton()
     C_ChatInfo.RegisterAddonMessagePrefix(COMM)
-    C_Timer.NewTicker(0.3, Pump)
+    C_Timer.NewTicker(0.3, function() Pump(); CheckKill() end)
     if TooltipDataProcessor then
       TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, TooltipUnit)
     else
@@ -1083,7 +1361,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
     end
     for _, ev in ipairs({ "PLAYER_LOGIN", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED",
       "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE",
-      "UNIT_TARGET", "PLAYER_DEAD" }) do
+      "UNIT_TARGET", "PLAYER_DEAD", "UNIT_DIED" }) do
       self:RegisterEvent(ev)
     end
   elseif event == "PLAYER_LOGIN" then
@@ -1110,6 +1388,7 @@ f:SetScript("OnEvent", function(self, event, arg, arg2, arg3, arg4)
   elseif event == "UPDATE_MOUSEOVER_UNIT" then CheckUnit("mouseover", "mouseover")
   elseif event == "PLAYER_TARGET_CHANGED" then CheckUnit("target", "target")
   elseif event == "UNIT_TARGET" then OnUnitTarget(arg)
+  elseif event == "UNIT_DIED" then OnUnitDied(arg)
   elseif event == "PLAYER_DEAD" then OnDeath()
   end
 end)
